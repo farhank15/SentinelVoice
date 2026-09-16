@@ -1,0 +1,26 @@
+{
+  "projectRoot": "/Users/mawa/Development/my_projects/sarjanamuda/G-voice",
+  "startTime": 1789461565447,
+  "lastActiveAt": 1789461565478,
+  "currentGoal": "",
+  "branchSwitched": false,
+  "completedSteps": [],
+  "modifiedFiles": [],
+  "failedFiles": [],
+  "searchResults": [],
+  "dependencyGraph": [],
+  "toolCalls": [],
+  "recordings": {
+    "archFlows": 0,
+    "gotchas": 0,
+    "decisions": 0,
+    "researchSaves": 0,
+    "features": 0,
+    "total": 0
+  },
+  "metrics": {
+    "filesRead": 0,
+    "filesEdited": 0,
+    "researchTimeSaved": 0
+  }
+}

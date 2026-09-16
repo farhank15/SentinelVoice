@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background-color: #f8fafc;
+  background-image: 
+    radial-gradient(#e2e8f0 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: #0f172a;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom clean scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Subtle voice wave animations */
+@keyframes eq-1 {
+  0%, 100% { height: 6px; }
+  50% { height: 24px; }
+}
+
+@keyframes eq-2 {
+  0%, 100% { height: 10px; }
+  50% { height: 32px; }
+}
+
+@keyframes eq-3 {
+  0%, 100% { height: 4px; }
+  50% { height: 20px; }
+}
+
+@keyframes eq-4 {
+  0%, 100% { height: 12px; }
+  50% { height: 36px; }
+}
+
+@keyframes eq-5 {
+  0%, 100% { height: 8px; }
+  50% { height: 28px; }
+}
+
+.animate-eq-1 { animation: eq-1 0.9s infinite ease-in-out; }
+.animate-eq-2 { animation: eq-2 0.7s infinite ease-in-out 0.15s; }
+.animate-eq-3 { animation: eq-3 1.1s infinite ease-in-out 0.3s; }
+.animate-eq-4 { animation: eq-4 0.8s infinite ease-in-out 0.05s; }
+.animate-eq-5 { animation: eq-5 1.0s infinite ease-in-out 0.25s; }

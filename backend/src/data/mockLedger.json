@@ -1,0 +1,40 @@
+{
+  "company_profile": {
+    "name": "OmniCorp Global Holdings",
+    "treasury_balance_usd": 45000000,
+    "currency": "USD",
+    "wire_approval_threshold_usd": 50000
+  },
+  "known_vendors": [
+    {
+      "id": "VEND-001",
+      "vendor_name": "Apex Cloud Infrastructure Inc.",
+      "account_number": "9876543210",
+      "bank": "JPMorgan Chase Bank, N.A.",
+      "category": "Cloud Infrastructure",
+      "typical_range_usd": [15000, 75000],
+      "status": "WHITELISTED",
+      "verified_since": "2023-01-15"
+    },
+    {
+      "id": "VEND-002",
+      "vendor_name": "Global Office Logistics Partners",
+      "account_number": "1122334455",
+      "bank": "Bank of America",
+      "category": "Corporate Logistics",
+      "typical_range_usd": [5000, 30000],
+      "status": "WHITELISTED",
+      "verified_since": "2023-05-20"
+    },
+    {
+      "id": "VEND-003",
+      "vendor_name": "Adidharma & Partners International LLP",
+      "account_number": "5544332211",
+      "bank": "Citigroup Corporate Banking",
+      "category": "Legal Retainer",
+      "typical_range_usd": [25000, 100000],
+      "status": "WHITELISTED",
+      "verified_since": "2022-11-01"
+    }
+  ]
+}

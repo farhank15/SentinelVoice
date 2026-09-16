@@ -1,0 +1,42 @@
+{
+  "executives": [
+    {
+      "id": "EXEC-001",
+      "name": "Robert Sterling",
+      "title": "Chief Executive Officer (CEO)",
+      "department": "Executive Leadership",
+      "slack_channel": "#ceo-emergency-security",
+      "phone_masked": "+1 (555) ***-9921",
+      "challenges": [
+        {
+          "challenge_id": "CHAL-RS1",
+          "question": "Please state the confidential codename of the European acquisition discussed during last Thursday's closed board meeting.",
+          "valid_keywords": ["project olympus", "olympus", "apex europe", "project apex"],
+          "clue": "Mythological mountain codename"
+        },
+        {
+          "challenge_id": "CHAL-RS2",
+          "question": "What is today's 4-digit emergency out-of-band wire authorization PIN displayed in your hardware token?",
+          "valid_keywords": ["7782", "778210", "pin 7782"],
+          "clue": "Hardware token passcode"
+        }
+      ]
+    },
+    {
+      "id": "EXEC-002",
+      "name": "Elena Rostova",
+      "title": "Chief Financial Officer (CFO)",
+      "department": "Finance & Treasury",
+      "slack_channel": "#cfo-treasury-alerts",
+      "phone_masked": "+1 (555) ***-3304",
+      "challenges": [
+        {
+          "challenge_id": "CHAL-ER1",
+          "question": "Confirm the official name of the audit firm currently performing our Q3 compliance review.",
+          "valid_keywords": ["deloitte", "pwc", "kpmg", "ernst"],
+          "clue": "Big Four Accounting Firm"
+        }
+      ]
+    }
+  ]
+}

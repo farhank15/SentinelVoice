@@ -1,0 +1,19 @@
+{
+  "name": "sentinel-voice-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SentinelVoice - Autonomous Voice Treasury Guardian & Fraud Interrogator Backend",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "bun --watch src/server.js",
+    "start": "bun run src/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/websocket": "^11.0.2",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "pino-pretty": "^13.0.0",
+    "ws": "^8.18.1"
+  }
+}

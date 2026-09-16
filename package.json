@@ -1,0 +1,12 @@
+{
+  "name": "g-voice-sentinel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SentinelVoice - Autonomous Voice Treasury Guardian & Fraud Interrogator (AssemblyAI Hackathon)",
+  "scripts": {
+    "dev:backend": "cd backend && bun run dev",
+    "dev:frontend": "cd frontend && bun run dev",
+    "start:backend": "cd backend && bun run start",
+    "build:frontend": "cd frontend && bun run build"
+  }
+}
