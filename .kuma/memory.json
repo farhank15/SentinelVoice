@@ -1,7 +1,7 @@
 {
   "projectRoot": "/Users/mawa/Development/my_projects/sarjanamuda/G-voice",
   "startTime": 1790215074021,
-  "lastActiveAt": 1790215081973,
+  "lastActiveAt": 1790218837173,
   "currentGoal": "Exploring project",
   "currentBranch": "main",
   "branchSwitched": false,
@@ -29,15 +29,53 @@
         "action": "gotcha"
       },
       "timestamp": 1790215081973
+    },
+    {
+      "toolName": "kuma_context_init",
+      "params": {},
+      "timestamp": 1790218376886
+    },
+    {
+      "toolName": "kuma_safety",
+      "params": {
+        "action": "verify"
+      },
+      "timestamp": 1790218726130
+    },
+    {
+      "toolName": "kuma_safety_verify",
+      "params": {},
+      "timestamp": 1790218726144
+    },
+    {
+      "toolName": "kuma_memory",
+      "params": {
+        "action": "decision"
+      },
+      "timestamp": 1790218829897
+    },
+    {
+      "toolName": "kuma_memory",
+      "params": {
+        "action": "decision"
+      },
+      "timestamp": 1790218837166
+    },
+    {
+      "toolName": "kuma_decision",
+      "params": {
+        "title": "Render Deployment Strategy (Unified Docker + Blueprint)"
+      },
+      "timestamp": 1790218837171
     }
   ],
   "recordings": {
     "archFlows": 0,
     "gotchas": 4,
-    "decisions": 5,
+    "decisions": 6,
     "researchSaves": 0,
     "features": 0,
-    "total": 9
+    "total": 10
   },
   "metrics": {
     "filesRead": 0,

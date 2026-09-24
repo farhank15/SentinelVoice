@@ -8,6 +8,8 @@
     "dev:frontend": "cd frontend && bun run dev",
     "start:backend": "cd backend && bun run start",
     "build:frontend": "cd frontend && bun run build",
+    "build": "cd frontend && bun install && bun run build && cd ../backend && bun install",
+    "start": "cd backend && bun run start",
     "test": "cd backend && bun test"
   }
 }

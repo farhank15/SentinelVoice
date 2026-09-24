@@ -1,0 +1,35 @@
+# ==============================================================================
+# SentinelVoice - Render Blueprint Specification (Infrastructure as Code)
+# ==============================================================================
+# To deploy via Render Blueprint:
+# 1. Push this repository to GitHub
+# 2. Go to Render Dashboard -> New -> Blueprint
+# 3. Connect this repository
+# 4. Fill in ASSEMBLYAI_API_KEY and LLM_API_KEY
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # SentinelVoice Unified Full-Stack Service (API + WebSocket + React UI)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: sentinel-voice
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8000
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY2
+        sync: false
+      - key: SLACK_WEBHOOK_URL
+        sync: false

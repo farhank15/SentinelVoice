@@ -1,6 +1,9 @@
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
+import fastifyStatic from '@fastify/static';
+import fs from 'node:fs';
+import path from 'node:path';
 import dotenv from 'dotenv';
 import { AssemblyVoiceAgentSession, AGENT_CORE_VERSION } from './agent/assemblyClient.js';
 import { EscrowService } from './services/escrowService.js';
@@ -35,16 +38,44 @@ await fastify.register(fastifyCors, {
 // Enable WebSocket support
 await fastify.register(fastifyWebsocket);
 
-// Root endpoint
-fastify.get('/', async () => {
-  return {
-    service: 'SentinelVoice Gateway',
-    version: '1.0.0',
-    description: 'Autonomous Voice Treasury Guardian & Fraud Interrogator',
-    ws_endpoint: '/ws/voice-session',
-    health_endpoint: '/api/health'
-  };
-});
+// Resolve frontend dist location across Monorepo, Docker, or Standalone setups
+const SERVER_DIR = import.meta.dir || path.dirname(new URL(import.meta.url).pathname);
+const CANDIDATE_DIST_PATHS = [
+  path.resolve(SERVER_DIR, '../../frontend/dist'),
+  path.resolve(SERVER_DIR, '../public'),
+  path.resolve(process.cwd(), 'frontend/dist'),
+  path.resolve(process.cwd(), 'dist')
+];
+const FRONTEND_DIST = CANDIDATE_DIST_PATHS.find(p => fs.existsSync(path.join(p, 'index.html')));
+
+if (FRONTEND_DIST) {
+  await fastify.register(fastifyStatic, {
+    root: FRONTEND_DIST,
+    prefix: '/'
+  });
+
+  // SPA fallback for client-side routing, preserving API and WebSocket endpoints
+  fastify.setNotFoundHandler((req, reply) => {
+    const url = req.raw.url || '';
+    if (url.startsWith('/api') || url.startsWith('/ws')) {
+      reply.code(404).send({ error: 'Endpoint not found', path: url });
+    } else {
+      reply.sendFile('index.html');
+    }
+  });
+  console.log(`📦 [SentinelVoice] Serving production UI from: ${FRONTEND_DIST}`);
+} else {
+  // Root metadata endpoint when running headless API
+  fastify.get('/', async () => {
+    return {
+      service: 'SentinelVoice Gateway',
+      version: '1.0.0',
+      description: 'Autonomous Voice Treasury Guardian & Fraud Interrogator',
+      ws_endpoint: '/ws/voice-session',
+      health_endpoint: '/api/health'
+    };
+  });
+}
 
 // Health check endpoint
 fastify.get('/api/health', async () => {
