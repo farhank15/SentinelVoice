@@ -595,7 +595,7 @@ export function ReasoningTopologyStudio({
           <div className="flex-1 relative flex items-center justify-center p-2 min-h-0 bg-[#070a12]">
             <svg
               viewBox="0 0 780 250"
-              className="w-full h-full max-h-[520px]"
+              className="w-full h-full max-h-130"
               preserveAspectRatio="xMidYMid meet"
             >
               <defs>
@@ -1161,7 +1161,7 @@ export function ReasoningTopologyStudio({
                             </button>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-1 border-t border-slate-800/60 font-sans">
+                        <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-1 border-t border-slate-800/60">
                           <span className="truncate text-slate-400">{tc.reference}</span>
                           <span className="text-slate-500 shrink-0 font-mono">Expected: {tc.expected} ➔ Outcome: {tc.predicted}</span>
                         </div>
