@@ -6,7 +6,8 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "bun --watch src/server.js",
-    "start": "bun run src/server.js"
+    "start": "bun run src/server.js",
+    "test": "bun test"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

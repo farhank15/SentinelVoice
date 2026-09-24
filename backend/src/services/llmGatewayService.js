@@ -4,9 +4,14 @@
  * Primary: Poolside AI (model: poolside/laguna-s-2.1)
  * Endpoint: https://inference.poolside.ai/v1/chat/completions
  *
- * Fallback: AssemblyAI LLM Gateway (model: qwen3.5-4b-32k-fast)
+ * Fallback 1: AssemblyAI LLM Gateway (model: qwen3.5-4b-32k-fast)
  * Endpoint: https://llm-gateway.assemblyai.com/v1/chat/completions
+ *
+ * Fallback 2: Google Gemini (GEMINI_API_KEY, model: gemini-2.5-flash)
+ * Endpoint: https://generativelanguage.googleapis.com/v1beta/models/...:generateContent
  */
+import { GeminiService } from './geminiService.js';
+
 export class LLMGatewayService {
   /**
    * Get active provider metadata
@@ -18,14 +23,16 @@ export class LLMGatewayService {
         provider: 'Poolside AI',
         model: 'poolside/laguna-s-2.1',
         type: 'FRONTIER_REASONING_MODEL',
-        endpoint: 'https://inference.poolside.ai/v1'
+        endpoint: 'https://inference.poolside.ai/v1',
+        fallbacks: [GeminiService.getInfo()]
       };
     }
     return {
       provider: 'AssemblyAI LLM Gateway',
       model: 'qwen3.5-4b-32k-fast',
       type: 'MANAGED_LLM_GATEWAY',
-      endpoint: 'https://llm-gateway.assemblyai.com/v1'
+      endpoint: 'https://llm-gateway.assemblyai.com/v1',
+      fallbacks: [GeminiService.getInfo()]
     };
   }
 
@@ -129,6 +136,23 @@ Return strict JSON with no markdown wrapping:
       }
     }
 
+    // 2b. Fallback: Google Gemini (GEMINI_API_KEY)
+    if (GeminiService.isConfigured()) {
+      const geminiResult = await GeminiService.generateJson(
+        'You are an unyielding treasury fraud detection intelligence engine. You evaluate zero-knowledge identity challenge responses. Output valid JSON only with keys: passed (boolean), confidence (number 0-1), threat_level ("LOW"|"ELEVATED"|"CRITICAL"), reasoning (string).',
+        prompt,
+        { maxOutputTokens: 600, timeoutMs: 12000 }
+      );
+      if (geminiResult.ok) {
+        console.log('[LLMGatewayService] ✅ Gemini evaluated challenge successfully');
+        return {
+          ...geminiResult.data,
+          engine: `Google Gemini (${geminiResult.model || 'gemini-2.5-flash'})`
+        };
+      }
+      console.warn('[LLMGatewayService] Gemini fallback unavailable:', geminiResult.error);
+    }
+
     // 3. Fallback Heuristic
     const lower = String(callerAnswer || '').toLowerCase();
     const passed = lower.includes('olympus') || lower.includes('7782') || lower.includes('deloitte');
@@ -149,7 +173,17 @@ Return strict JSON with no markdown wrapping:
    */
   static async classifyThreatVectors(transcript) {
     const poolsideKey = process.env.LLM_API_KEY;
-    if (!poolsideKey) return null;
+    if (!poolsideKey && !GeminiService.isConfigured()) return null;
+
+    if (!poolsideKey && GeminiService.isConfigured()) {
+      const geminiResult = await GeminiService.generateJson(
+        'Classify BEC fraud vectors. Output JSON only with keys: coercion_score (number), urgency_score (number), secrecy_demanded (boolean), verdict ("BENIGN"|"SUSPICIOUS"|"CRITICAL_FRAUD").',
+        `Transcript: "${transcript}"`,
+        { maxOutputTokens: 400, timeoutMs: 10000 }
+      );
+      if (geminiResult.ok) return geminiResult.data;
+      return null;
+    }
 
     try {
       const response = await fetch('https://inference.poolside.ai/v1/chat/completions', {

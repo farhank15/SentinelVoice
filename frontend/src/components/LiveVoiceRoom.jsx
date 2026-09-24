@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
+import { VoiceWave } from './VoiceWave';
 
 export function LiveVoiceRoom({
   agentState,
@@ -25,6 +26,7 @@ export function LiveVoiceRoom({
   isScenarioRunning = false,
   latestThinking = null,
   activeScenarioMeta = null,
+  micLevel = 0,
   onToggleMic,
   onTriggerScenario,
   onReset
@@ -175,6 +177,15 @@ export function LiveVoiceRoom({
             <span>{stateCfg.label}</span>
           </div>
         </div>
+      </div>
+
+      {/* 1b. Live Voice Activity Wave (real mic RMS / agent speaking indicator) */}
+      <div className="shrink-0 border-b border-slate-100 bg-white py-1">
+        <VoiceWave
+          level={micLevel}
+          agentState={agentState}
+          isMicActive={isMicActive}
+        />
       </div>
 
       {/* 2. Autonomous Forensic Reasoning Accordion (Collapsible, takes zero space if collapsed) */}

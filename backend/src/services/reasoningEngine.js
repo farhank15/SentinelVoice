@@ -1,4 +1,5 @@
 import { LLMGatewayService } from './llmGatewayService.js';
+import { GeminiService } from './geminiService.js';
 import { LedgerService } from './ledgerService.js';
 import { ChallengeService } from './challengeService.js';
 import { EscrowService } from './escrowService.js';
@@ -6,6 +7,33 @@ import { NotificationService } from './notificationService.js';
 import { getScenarioByKey, SCENARIOS_MATRIX } from './scenarioMatrix.js';
 
 export class ReasoningEngine {
+  /**
+   * Circuit breaker for the Poolside gateway (ARIA-style).
+   * If the network/gateway is consistently timing out, per-turn calls would
+   * stall every scenario turn by 25s. After 2 consecutive failures the breaker
+   * trips: calls fail fast (instant deterministic fallback) for 60s, then a
+   * single probe request is allowed through to test recovery.
+   */
+  static _llmBreaker = { failures: 0, openUntil: 0 };
+
+  static _llmBreakerOpen() {
+    return Date.now() < ReasoningEngine._llmBreaker.openUntil;
+  }
+
+  static _llmBreakerRecord(success) {
+    const b = ReasoningEngine._llmBreaker;
+    if (success) {
+      b.failures = 0;
+      b.openUntil = 0;
+    } else {
+      b.failures++;
+      if (b.failures >= 2) {
+        b.openUntil = Date.now() + 60000; // fail fast for 60s
+        console.warn('[ReasoningEngine] ⚡ Circuit breaker OPEN — Poolside skipped for 60s (deterministic engine takes over)');
+      }
+    }
+  }
+
   /**
    * Run real LLM evaluation on a conversational turn using Poolside Laguna S
    */
@@ -77,28 +105,61 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
 `;
 
     // Attempt real frontier inference via Poolside Laguna S 2.1
-    if (poolsideKey && poolsideKey.startsWith('sky_')) {
+    // (skipped entirely while the circuit breaker is open — fail fast)
+    if (poolsideKey && poolsideKey.startsWith('sky_') && !ReasoningEngine._llmBreakerOpen()) {
       try {
         const startTime = Date.now();
-        const response = await fetch('https://inference.poolside.ai/v1/chat/completions', {
+        const conversationMessages = [
+          { role: 'system', content: systemPrompt }
+        ];
+        if (Array.isArray(history) && history.length > 0) {
+          for (const item of history) {
+            const isAgent = item.role === 'agent' || item.speaker?.includes('Sentinel') || item.speaker?.includes('AI');
+            const txt = item.text || item.speech || item.content || '';
+            if (txt) {
+              conversationMessages.push({
+                role: isAgent ? 'assistant' : 'user',
+                content: `${item.speaker || (isAgent ? 'SentinelVoice AI' : 'Caller')}: "${txt}"`
+              });
+            }
+          }
+        }
+        conversationMessages.push({
+          role: 'user',
+          content: `CURRENT INCOMING CALLER TURN (Turn ${turnIndex + 1}): "${callerUtterance}". Claimed identity: ${executiveClaimed}.`
+        });
+
+        const callPoolside = () => fetch('https://inference.poolside.ai/v1/chat/completions', {
           method: 'POST',
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(25000), // 15s timed out on slow turns
           headers: {
             'Authorization': `Bearer ${poolsideKey}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             model: 'poolside/laguna-s-2.1',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: `Caller statement: "${callerUtterance}". Claimed identity: ${executiveClaimed}. Turn index: ${turnIndex + 1}.` }
-            ],
+            messages: conversationMessages,
             temperature: 0.1,
-            max_tokens: 450
+            max_tokens: 900 // 450 truncated the JSON mid-object -> "Expected '}'" -> whole turn discarded
           })
         });
 
+        let response = await callPoolside();
+        if (response.status === 429 || response.status >= 500) {
+          // One transient-failure retry before falling back to the deterministic engine
+          await new Promise((r) => setTimeout(r, 800));
+          response = await callPoolside();
+        }
+
+        if (!response.ok) {
+          // Non-transient failure (auth, bad request) — record it so repeated
+          // failures trip the breaker instead of stalling every turn.
+          ReasoningEngine._llmBreakerRecord(false);
+          console.warn(`[ReasoningEngine] Poolside HTTP ${response.status} — using deterministic engine`);
+        }
+
         if (response.ok) {
+          ReasoningEngine._llmBreakerRecord(true);
           const data = await response.json();
           const latencyMs = Date.now() - startTime;
           let rawContent = data.choices?.[0]?.message?.content;
@@ -114,7 +175,35 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
             cleaned = jsonMatch[0];
           }
 
-          const parsed = JSON.parse(cleaned);
+          let parsed;
+          try {
+            parsed = JSON.parse(cleaned);
+          } catch (parseErr) {
+            // Truncated JSON (token limit or stream cut): attempt brace/quote repair
+            // before discarding the entire LLM turn to the deterministic fallback.
+            let repaired = cleaned.replace(/,\s*([}\]])/g, '$1'); // trailing commas
+            if (!repaired.endsWith('}')) {
+              // Close dangling strings/objects left by truncation
+              const quotes = (repaired.match(/"/g) || []).length;
+              if (quotes % 2 === 1) repaired += '"';
+              repaired = repaired.replace(/,\s*$/, '');
+              repaired += '}';
+            }
+            // Ensure nested objects opened inside are closed
+            let opens = 0;
+            for (const ch of repaired) {
+              if (ch === '{') opens++;
+              else if (ch === '}') opens--;
+            }
+            if (opens > 0) repaired += '}'.repeat(opens);
+            parsed = JSON.parse(repaired);
+          }
+
+          // A reply without speech_response is useless for a voice agent —
+          // fall through to the deterministic engine instead of going silent.
+          if (!parsed || typeof parsed.speech_response !== 'string' || !parsed.speech_response.trim()) {
+            throw new Error('LLM returned no speech_response');
+          }
 
           if (!parsed.thinking && reasoningContent) {
             parsed.thinking = reasoningContent.slice(0, 300) + '...';
@@ -127,11 +216,48 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
           };
         }
       } catch (err) {
+        ReasoningEngine._llmBreakerRecord(false); // timeout/parse failure counts toward the breaker
         console.warn('[ReasoningEngine] Poolside inference fallback:', err.message);
       }
     }
 
-    // Fallback Deterministic Reasoning Engine (Preserves strict logic if network fails)
+    // 2. Fallback: Google Gemini (GEMINI_API_KEY) — strict JSON forensic evaluation
+    if (GeminiService.isConfigured()) {
+      const geminiStart = Date.now();
+      let userPromptWithHistory = '';
+      if (Array.isArray(history) && history.length > 0) {
+        userPromptWithHistory += 'PRIOR CONVERSATION TRANSCRIPT IN THIS SESSION:\n';
+        for (const item of history) {
+          const spk = item.speaker || (item.role === 'agent' ? 'SentinelVoice AI' : 'Caller');
+          const txt = item.text || item.speech || item.content || '';
+          if (txt) userPromptWithHistory += `- ${spk}: "${txt}"\n`;
+        }
+        userPromptWithHistory += '\n';
+      }
+      userPromptWithHistory += `CURRENT INCOMING CALLER TURN (Turn ${turnIndex + 1}): "${callerUtterance}". Claimed identity: ${executiveClaimed}.`;
+
+      const geminiResult = await GeminiService.generateJson(
+        systemPrompt,
+        userPromptWithHistory,
+        { maxOutputTokens: 900, timeoutMs: 12000 }
+      );
+      if (geminiResult.ok && geminiResult.data &&
+          typeof geminiResult.data.speech_response === 'string' && geminiResult.data.speech_response.trim()) {
+        console.log(`[ReasoningEngine] ✅ Gemini fallback evaluated turn (${Date.now() - geminiStart}ms${geminiResult.keyTier ? `, key#${geminiResult.keyTier}` : ''})`);
+        return {
+          ...geminiResult.data,
+          latencyMs: Date.now() - geminiStart,
+          engine: `Google Gemini (${geminiResult.model || 'gemini-2.5-flash'})`
+        };
+      }
+      if (!geminiResult.ok) {
+        console.warn('[ReasoningEngine] Gemini fallback unavailable:', geminiResult.error);
+      } else {
+        console.warn('[ReasoningEngine] Gemini fallback returned no speech_response');
+      }
+    }
+
+    // 3. Fallback Deterministic Reasoning Engine (Preserves strict logic if network fails)
     return this.generateDeterministicForensics({
       callerUtterance,
       executiveClaimed,
@@ -246,7 +372,13 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
       }
     } else {
       // Turn 2+: Interrogation Evaluation, Adaptive Evasion Intercept & Settlement
-      const isChallengePassed = lower.includes('olympus') || lower.includes('7782') || lower.includes('deloitte') || (!isExceedsSOX && isVendorWhitelisted && !isSynthetic);
+      // SECURITY FIX: challenge evaluation is now registry-driven (zero-hardcode).
+      // Knowledge credentials (codename/audit firm) and the live TOTP token window
+      // are resolved from the executive registry — not hardcoded literals.
+      const creds = ChallengeService.evaluateUtteranceAgainstCredentials(executiveClaimed, callerUtterance);
+      const isChallengePassed = creds.knowledgePassed
+        || creds.tokenPassed
+        || (!isExceedsSOX && isVendorWhitelisted && !isSynthetic);
 
       if (!isChallengePassed || isSynthetic || hasHostileCoercion || !isVendorWhitelisted) {
         let fraudReason = 'Zero-Knowledge Challenge Refusal & Critical BEC Pattern';

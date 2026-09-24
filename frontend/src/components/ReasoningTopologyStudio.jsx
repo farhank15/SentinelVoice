@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiUrl } from '../config/api.js';
 import {
   Workflow,
   Shield,
@@ -100,7 +101,7 @@ export function ReasoningTopologyStudio({
   const [isLoadingBenchmark, setIsLoadingBenchmark] = useState(false);
 
   useEffect(() => {
-    fetch('/api/benchmark/latest')
+    fetch(apiUrl('/api/benchmark/latest'))
       .then((res) => res.json())
       .then((data) => {
         if (data && data.summary) setBenchmarkData(data);
@@ -111,7 +112,7 @@ export function ReasoningTopologyStudio({
   const runFullBenchmark = async () => {
     setIsLoadingBenchmark(true);
     try {
-      const res = await fetch('/api/benchmark/run', {
+      const res = await fetch(apiUrl('/api/benchmark/run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tuning_config: patternSensitivities })

@@ -7,6 +7,7 @@
     "dev:backend": "cd backend && bun run dev",
     "dev:frontend": "cd frontend && bun run dev",
     "start:backend": "cd backend && bun run start",
-    "build:frontend": "cd frontend && bun run build"
+    "build:frontend": "cd frontend && bun run build",
+    "test": "cd backend && bun test"
   }
 }

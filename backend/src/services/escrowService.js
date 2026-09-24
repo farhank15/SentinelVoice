@@ -1,13 +1,20 @@
+const parseCleanAmount = (val) => {
+  if (typeof val === 'number') return val;
+  const cleaned = String(val || '').replace(/[^0-9.]/g, '');
+  return Number(cleaned) || 0;
+};
+
 export class EscrowService {
   static transactions = new Map();
 
   static initializeTransaction(txData) {
     const txId = txData.tx_id || `TX-${Date.now().toString().slice(-6)}`;
+    const parsedAmount = parseCleanAmount(txData.amount_usd !== undefined ? txData.amount_usd : txData.amount);
     const record = {
       tx_id: txId,
       account_number: txData.account_number || 'UNKNOWN',
       vendor_name: txData.vendor_name || 'UNKNOWN',
-      amount_usd: Number(txData.amount_usd || txData.amount) || 0,
+      amount_usd: parsedAmount,
       currency: 'USD',
       status: 'PENDING_VERIFICATION', // PENDING_VERIFICATION | FROZEN | RELEASED
       risk_level: 'EVALUATING',
@@ -18,6 +25,23 @@ export class EscrowService {
     };
     this.transactions.set(txId, record);
     return record;
+  }
+
+  static updateActiveTransaction(fields = {}) {
+    const targetId = Array.from(this.transactions.keys()).pop();
+    let tx = targetId ? this.transactions.get(targetId) : null;
+    if (!tx) {
+      tx = this.initializeTransaction(fields);
+    } else {
+      const parsedAmount = parseCleanAmount(fields.amount_usd !== undefined ? fields.amount_usd : fields.amount);
+      if (parsedAmount > 0) tx.amount_usd = parsedAmount;
+      if (fields.vendor_name && fields.vendor_name !== 'UNKNOWN') tx.vendor_name = fields.vendor_name;
+      if (fields.account_number && fields.account_number !== 'UNKNOWN') tx.account_number = fields.account_number;
+      if (fields.status) tx.status = fields.status;
+      if (fields.risk_level) tx.risk_level = fields.risk_level;
+      if (fields.freeze_reason) tx.freeze_reason = fields.freeze_reason;
+    }
+    return tx;
   }
 
   static emergencyEscrowFreeze(txId = null, reason = 'Detected high-confidence deepfake/BEC anomaly', riskLevel = 'CRITICAL') {

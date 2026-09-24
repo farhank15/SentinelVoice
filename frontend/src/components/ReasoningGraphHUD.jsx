@@ -37,10 +37,14 @@ export function ReasoningGraphHUD({
 
   // Dynamic state resolver for all 12 Canonical Banking Nodes (N1 to N12)
   const isStandby = !isCallActive && !isFrozen && !isReleased;
-  const isSynthetic = (activeScenarioMeta?.telemetry?.asvSpoofScore || 0) >= 0.7;
 
   // Extract real-time Cialdini Multimodal Persuasion Vectors & Attack Classification
   const assessment = latestThinking?.threatAssessment || {};
+  const activeAsvScore = assessment.synthetic_confidence !== undefined
+    ? assessment.synthetic_confidence
+    : (activeScenarioMeta?.telemetry?.asvSpoofScore !== undefined ? activeScenarioMeta.telemetry.asvSpoofScore : (isCallActive ? 0.04 : 0.0));
+  const isSynthetic = activeAsvScore >= 0.7;
+
   const persuasionVectors = assessment.persuasion_vectors || {
     authority_pressure: assessment.coercion_score || (isCallActive ? 0.20 : 0.0),
     urgency_scarcity: assessment.urgency_score || (isCallActive ? 0.25 : 0.0),
@@ -53,10 +57,6 @@ export function ReasoningGraphHUD({
     isReleased ? 'AUTHENTIC HUMAN ENTITY' :
     isCallActive ? 'EVALUATING DEMEANOR' : 'ZERO-TRUST STANDBY'
   );
-
-  const activeAsvScore = assessment.synthetic_confidence !== undefined
-    ? assessment.synthetic_confidence
-    : (activeScenarioMeta?.telemetry?.asvSpoofScore !== undefined ? activeScenarioMeta.telemetry.asvSpoofScore : (isCallActive ? 0.04 : 0.0));
 
   const getNodeState = (nodeCode) => {
     if (isStandby) return 'IDLE';
@@ -166,33 +166,59 @@ export function ReasoningGraphHUD({
           forensicNote: 'Evaluates cryptographic signature of inbound calling number to detect spoofed caller IDs and VoIP PBX trunk hijacking.'
         };
 
-      case 'n2':
+      case 'n2': {
+        const acousticMetrics = assessment?.acoustic_metrics;
         return {
           ...node,
           state,
-          title: 'Acoustic DSP Spectral Gate',
-          standard: 'IEEE Audio Processing • Phase Coherence Analysis',
+          title: 'Acoustic DSP Spectral Gate (YIN & LPC)',
+          standard: 'IEEE Audio Processing • YIN F0 & Levinson-Durbin Formants',
           metrics: [
-            { label: 'Phase Jitter', value: activeScenarioMeta?.telemetry?.voiceJitter || (isCallActive ? '0.012ms (Organic Timbre)' : 'Standby') },
-            { label: 'Diffusion Rate', value: activeScenarioMeta?.telemetry?.spectralContinuity || (isCallActive ? 'NATURAL_RESONANCE' : '--') },
-            { label: 'Vocoder Artifacts', value: isSynthetic ? 'DETECTED (Phase Glitch & Diffusion)' : (isCallActive ? 'NONE (Continuous Vocal Resonance)' : '--') }
+            {
+              label: 'Fundamental Pitch (F0)',
+              value: (acousticMetrics && acousticMetrics.f0_mean_hz > 0)
+                ? `${acousticMetrics.f0_mean_hz} Hz (±${acousticMetrics.f0_std_hz}Hz)`
+                : (isCallActive ? 'Extracting live pitch...' : 'Standby')
+            },
+            {
+              label: 'Vocal Formants (F1/F2)',
+              value: (acousticMetrics && acousticMetrics.formant_f1_hz > 0)
+                ? `F1: ${acousticMetrics.formant_f1_hz}Hz / F2: ${acousticMetrics.formant_f2_hz}Hz`
+                : (isCallActive ? 'Extracting vocal tract geometry...' : '--')
+            },
+            {
+              label: 'Glottal Micro-Jitter',
+              value: (acousticMetrics && acousticMetrics.jitter_percent > 0)
+                ? `${acousticMetrics.jitter_percent}% (${acousticMetrics.verdict})`
+                : (activeScenarioMeta?.telemetry?.voiceJitter || (isCallActive ? 'Measuring glottal stability...' : '--'))
+            }
           ],
-          forensicNote: 'Performs continuous Fourier transform to analyze vocoder neural artifacts, acoustic discontinuities, and high-frequency synthetic phase jumps.'
+          forensicNote: 'Applies real-time YIN pitch tracking and LPC Levinson-Durbin formant extraction to verify physical vocal tract length and glottal micro-perturbation.'
         };
+      }
 
-      case 'n3':
+      case 'n3': {
+        const acousticMetrics = assessment?.acoustic_metrics;
+        const voiceprintMatchVal = (acousticMetrics && acousticMetrics.voiceprint_match > 0)
+          ? `${(acousticMetrics.voiceprint_match * 100).toFixed(0)}% (${acousticMetrics.voiceprint_match >= 0.65 ? 'AUTHENTICATED' : 'ANOMALY'})`
+          : (isSynthetic ? 'FAILED (Cosine Distance > 0.82)' : (isCallActive ? 'Comparing 1:1 SQLite vault...' : 'Standby'));
+        const vocalTimbreVal = (acousticMetrics && acousticMetrics.vocal_timbre && !acousticMetrics.vocal_timbre.includes('STANDBY'))
+          ? acousticMetrics.vocal_timbre
+          : (isSynthetic ? 'Neural TTS Model Output' : (isCallActive ? 'Analyzing timbre resonance...' : '--'));
+
         return {
           ...node,
           state,
-          title: 'ASVspoof Neural Voiceprint Biometrics',
-          standard: 'ASVspoof 2021 Benchmark • RawNet2 Biometric DNN',
+          title: 'ASVspoof 5 Biometric Voiceprint Gate',
+          standard: 'NIST SP 800-63B • SASV Baseline (ECAPA-TDNN & YIN)',
           metrics: [
             { label: 'Synthetic Spoof Score', value: `${(activeAsvScore * 100).toFixed(1)}%` },
-            { label: 'Voiceprint Match', value: isSynthetic ? 'FAILED (Cosine Distance > 0.82)' : (isCallActive ? 'AUTHENTICATED (Enrolled VIP Voiceprint)' : 'Standby') },
-            { label: 'Vocal Phonation', value: isSynthetic ? 'Neural TTS Model Output' : (isCallActive ? 'Biological Laryngeal Resonance' : '--') }
+            { label: 'Voiceprint Match', value: voiceprintMatchVal },
+            { label: 'Resonance Geometry', value: vocalTimbreVal }
           ],
-          forensicNote: 'Neural biometric model compares incoming phonemes against executive voiceprint models to classify deepfakes with 99.4% precision.'
+          forensicNote: 'Cross-references 1:1 acoustic timbre and formant geometry against enrolled executive profiles to expose voice cloning or acoustic mismatch.'
         };
+      }
 
       case 'n4':
         return {

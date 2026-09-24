@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { apiUrl, getWsUrl } from '../config/api.js';
 
 export function useVoiceSession() {
   const [connectionStatus, setConnectionStatus] = useState('DISCONNECTED'); // DISCONNECTED | CONNECTING | CONNECTED | ERROR
@@ -19,6 +20,7 @@ export function useVoiceSession() {
   const [isScenarioRunning, setIsScenarioRunning] = useState(false);
   const [latestThinking, setLatestThinking] = useState(null);
   const [activeScenarioMeta, setActiveScenarioMeta] = useState(null);
+  const [micLevel, setMicLevel] = useState(0); // live mic RMS 0..1 for the wave visualizer
   const isScenarioRunningRef = useRef(false);
 
   const wsRef = useRef(null);
@@ -27,6 +29,13 @@ export function useVoiceSession() {
   const processorRef = useRef(null);
   const playAudioCtxRef = useRef(null);
   const nextPlayTimeRef = useRef(0);
+  const isCallStartedRef = useRef(false);
+  const scheduledSourcesRef = useRef(new Set()); // all queued BufferSources (for instant barge-in flush)
+  const agentSpeakingRef = useRef(false); // half-duplex gate: mute mic while agent speaks (echo prevention)
+  const halfDuplexTailRef = useRef(null); // short tail timer before reopening mic gate
+  const lastCallerFinalAtRef = useRef(0); // zombie-bubble watchdog: last time a caller bubble was finalized
+  const micGateStuckSinceRef = useRef(0); // watchdog: when the half-duplex gate closed
+  const isUnmountedRef = useRef(false); // stop ws.onclose auto-reconnect after unmount
 
   // Unlocks audio context on user gesture (bypasses browser autoplay policy)
   const unlockAudioContext = useCallback(() => {
@@ -43,9 +52,29 @@ export function useVoiceSession() {
     }
   }, []);
 
-  const playAudioChunk = useCallback((base64) => {
+  const currentReplyIdRef = useRef(null);
+
+  // Instantly stop all scheduled audio (barge-in / interruption flush)
+  const flushPlayback = useCallback(() => {
+    nextPlayTimeRef.current = 0;
+    const sources = scheduledSourcesRef.current;
+    scheduledSourcesRef.current = new Set();
+    sources.forEach((src) => {
+      try { src.stop(); } catch (e) {}
+      try { src.disconnect(); } catch (e) {}
+    });
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+  }, []);
+
+  const playAudioChunk = useCallback((base64, replyId = null) => {
     try {
       if (!base64) return;
+      if (replyId && currentReplyIdRef.current !== replyId) {
+        currentReplyIdRef.current = replyId;
+        nextPlayTimeRef.current = 0;
+      }
       const binaryString = atob(base64);
       const len = binaryString.length;
       if (len < 2) return;
@@ -84,6 +113,10 @@ export function useVoiceSession() {
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
 
+      // Track source for barge-in flush
+      scheduledSourcesRef.current.add(source);
+      source.onended = () => scheduledSourcesRef.current.delete(source);
+
       // Master gain node to ensure full loudness
       const masterGain = audioCtx.createGain();
       masterGain.gain.value = 1.0;
@@ -91,9 +124,9 @@ export function useVoiceSession() {
       masterGain.connect(audioCtx.destination);
 
       const now = audioCtx.currentTime;
-      // Gapless jitter-free lookahead buffer
+      // Seamless audio queue: if queue is idle or fell behind real time, schedule with small jitter buffer
       if (nextPlayTimeRef.current < now) {
-        nextPlayTimeRef.current = now + 0.03;
+        nextPlayTimeRef.current = now + 0.025;
       }
 
       source.start(nextPlayTimeRef.current);
@@ -106,13 +139,9 @@ export function useVoiceSession() {
   const speakSynthesis = useCallback((text, role) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-      window.speechSynthesis.cancel();
-      setTimeout(() => {
+      const speakChunk = (chunkText) => {
         try {
-          const utterance = new SpeechSynthesisUtterance(text);
+          const utterance = new SpeechSynthesisUtterance(chunkText);
           utterance.rate = 1.05;
           utterance.pitch = role === 'agent' ? 1.05 : 0.85;
           const voices = window.speechSynthesis.getVoices();
@@ -122,7 +151,18 @@ export function useVoiceSession() {
         } catch (err) {
           console.warn('[SpeechSynthesis Speak]', err);
         }
-      }, 30);
+      };
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+      // cancel() is asynchronous inside Chrome — speaking in the same tick gets
+      // swallowed. Give the queue one tick to actually flush before speaking.
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        window.speechSynthesis.cancel();
+        setTimeout(() => speakChunk(text), 60);
+      } else {
+        speakChunk(text);
+      }
     } catch (e) {
       console.warn('[SpeechSynthesis]', e);
     }
@@ -132,10 +172,7 @@ export function useVoiceSession() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
     setConnectionStatus('CONNECTING');
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const isDev = window.location.port === '5173';
-    const targetHost = isDev ? `${window.location.hostname}:8000` : window.location.host;
-    const wsUrl = `${protocol}//${targetHost}/ws/voice-session`;
+    const wsUrl = getWsUrl();
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -155,72 +192,119 @@ export function useVoiceSession() {
 
         if (msg.type === 'agent_state' && msg.state) {
           setAgentState(msg.state);
-          if (msg.interrupted) {
-            // User interrupted the agent (Barge-in)! Clear buffer timing
-            nextPlayTimeRef.current = 0;
+
+          // Half-duplex echo gate state tracking (ARIA-style: gate mic while agent
+          // speaks, reopen after a short tail so the TTS tail doesn't retrigger VAD)
+          if (msg.state === 'SPEAKING') {
+            agentSpeakingRef.current = true;
+            if (halfDuplexTailRef.current) {
+              clearTimeout(halfDuplexTailRef.current);
+              halfDuplexTailRef.current = null;
+            }
+          } else if (msg.state === 'LISTENING' || msg.state === 'IDLE') {
+            if (halfDuplexTailRef.current) clearTimeout(halfDuplexTailRef.current);
+            halfDuplexTailRef.current = setTimeout(() => {
+              agentSpeakingRef.current = false;
+            }, 350);
+          }
+
+          // BARGE-IN FLUSH POLICY (per AssemblyAI docs): flush scheduled audio only
+          // on reply.done with status 'interrupted' (handled below via reply_done).
+          // Do NOT flush on input.speech.started: with laptop speakers the VAD can
+          // pick up the agent's own TTS and we'd cut off our own audio mid-reply
+          // ("agent interrupts itself" — docs: Troubleshooting). The half-duplex
+          // gate above already prevents echo from reaching the VAD.
+          if (msg.interrupted && msg.state === 'LISTENING' && !msg.userSpeaking) {
+            // true semantic barge-in confirmed by the server (reply.done interrupted)
+            flushPlayback();
+            if (halfDuplexTailRef.current) {
+              clearTimeout(halfDuplexTailRef.current);
+              halfDuplexTailRef.current = null;
+            }
+            agentSpeakingRef.current = false;
           }
         }
 
         if (msg.type === 'audio_chunk' && msg.buffer) {
-          playAudioChunk(msg.buffer);
+          playAudioChunk(msg.buffer, msg.replyId);
         }
 
         if (msg.type === 'transcript_delta') {
+          // Merge streaming deltas into ONE bubble keyed by replyId (agent replies)
+          // or role (caller partials). This guarantees a long spoken paragraph stays
+          // a single bubble instead of spawning duplicates.
+          const streamKey = msg.replyId || `role_${msg.role}`;
           setTranscripts((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.isStreaming && last.role === msg.role) {
-              const updatedText = msg.mode === 'append' ? last.text + (msg.text || '') : msg.text;
-              return [
-                ...prev.slice(0, -1),
-                {
-                  ...last,
-                  text: updatedText
-                }
-              ];
-            } else {
-              return [
-                ...prev,
-                {
-                  id: `stream_${Date.now()}_${Math.random()}`,
-                  role: msg.role,
-                  speaker: msg.speaker || (msg.role === 'agent' ? 'SentinelVoice AI' : 'Caller (Live Voice)'),
-                  text: msg.text || '',
-                  isStreaming: true,
-                  timestamp: new Date().toLocaleTimeString('en-US')
-                }
-              ];
+            const idx = prev.findIndex((t) => t.streamKey === streamKey);
+            if (idx !== -1) {
+              const target = prev[idx];
+              const needsSpace = msg.mode === 'append' &&
+                target.text.length > 0 &&
+                !target.text.endsWith(' ') &&
+                !msg.text.startsWith(' ') &&
+                !/^[.,!?;:'")\]}]/.test(msg.text);
+              const updatedText = msg.mode === 'append'
+                ? target.text + (needsSpace ? ' ' : '') + (msg.text || '')
+                : msg.text;
+              const next = prev.slice();
+              next[idx] = { ...target, text: updatedText, isStreaming: true, lastDeltaAt: Date.now() };
+              return next;
             }
+            return [
+              ...prev,
+              {
+                id: `stream_${Date.now()}_${Math.random()}`,
+                streamKey,
+                role: msg.role,
+                speaker: msg.speaker || (msg.role === 'agent' ? 'SentinelVoice AI' : 'Caller (Live Voice)'),
+                text: msg.text || '',
+                isStreaming: true,
+                lastDeltaAt: Date.now(),
+                timestamp: new Date().toLocaleTimeString('en-US')
+              }
+            ];
           });
 
           if (msg.role === 'agent') {
+            agentSpeakingRef.current = true;
             setAgentState('SPEAKING');
-          } else {
-            setAgentState('ANALYZING');
           }
+          // NOTE: caller delta no longer forces ANALYZING — that made the UI flap
+          // between Listening/Analyzing on every word. input.speech.* events drive it.
         }
 
         if (msg.type === 'transcript' || msg.type === 'transcript_final') {
+          // Final transcript: finalize the streaming bubble if it exists, else create one.
           setTranscripts((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.isStreaming && last.role === msg.role) {
-              return [
-                ...prev.slice(0, -1),
-                {
-                  ...last,
-                  text: msg.text,
-                  isStreaming: false,
-                  timestamp: msg.timestamp || new Date().toLocaleTimeString('en-US')
-                }
-              ];
+            const streamKey = msg.replyId || `role_${msg.role}`;
+            const idx = prev.findIndex((t) => t.streamKey === streamKey && t.isStreaming);
+            if (idx !== -1) {
+              const next = prev.slice();
+              next[idx] = {
+                ...next[idx],
+                text: msg.text, // authoritative full text (also fixes partial concat drift)
+                isStreaming: false
+              };
+              return next;
+            }
+            // No matching streaming bubble (e.g. final arrived without deltas)
+            // Caller turns can arrive as multiple finals with different item_ids
+            // (VAD splits, duplicate transcript.user emissions). Merge anything
+            // finalized within the last 4s for the same role into ONE bubble.
+            const lastSameRole = [...prev].reverse().find((t) => t.role === msg.role && !t.isStreaming);
+            if (lastSameRole && Date.now() - (lastSameRole.finalizedAt || 0) < 4000) {
+              return prev.map((t) => t.id === lastSameRole.id ? { ...t, text: msg.text, finalizedAt: Date.now() } : t);
             }
             return [
               ...prev,
               {
                 id: `tr_${Date.now()}_${Math.random()}`,
+                streamKey: `role_${msg.role}`,
                 role: msg.role,
                 speaker: msg.speaker || (msg.role === 'agent' ? 'SentinelVoice AI' : 'Caller'),
                 text: msg.text,
                 isStreaming: false,
+                finalizedAt: Date.now(),
                 timestamp: msg.timestamp || new Date().toLocaleTimeString('en-US')
               }
             ];
@@ -232,11 +316,64 @@ export function useVoiceSession() {
           }
 
           if (msg.role === 'agent') {
-            setAgentState('SPEAKING');
-            setTimeout(() => setAgentState('LISTENING'), 3500);
+            if (msg.localTakeover) {
+              // Local-brain turn: the speak_text handler owns the SPEAKING window
+              // and the mic gate (real TTS playback time, not event timing).
+              // Forcing LISTENING here would open the gate while browser TTS is
+              // still playing -> mic re-captures the TTS -> echo loop.
+            } else {
+              agentSpeakingRef.current = false;
+              setAgentState('LISTENING'); // reply fully delivered — no artificial 3.5s freeze
+            }
           } else {
-            setAgentState('ANALYZING');
+            setAgentState('ANALYZING'); // caller final -> agent is about to think/reply
+            lastCallerFinalAtRef.current = Date.now();
+            micGateStuckSinceRef.current = 0; // gate clearly reopened — reset watchdog
           }
+        }
+
+        // Zombie-bubble watchdog: a streaming bubble whose reply ended >15s ago but
+        // never got a final transcript (dropped packet, reply.done(interrupted) race)
+        // would show a blinking cursor forever and block same-key bubbles. Kill it.
+        if (msg.type === 'reply_done') {
+          // Authoritative end-of-reply from backend. Per AssemblyAI docs, THIS is the
+          // flush point: reply.done with status 'interrupted' means the server cut the
+          // reply short — drain scheduled audio so stale speech never plays.
+          if (msg.status === 'interrupted') {
+            flushPlayback();
+            agentSpeakingRef.current = false;
+          }
+          setTimeout(() => {
+            setTranscripts((prev) => {
+              const now = Date.now();
+              let changed = false;
+              const next = prev.map((t) => {
+                if (t.isStreaming && (msg.replyId == null || t.streamKey === msg.replyId || now - t.lastDeltaAt > 5000)) {
+                  changed = true;
+                  return { ...t, isStreaming: false, finalizedAt: t.finalizedAt || now };
+                }
+                return t;
+              });
+              return changed ? next : prev;
+            });
+          }, 150);
+        }
+
+        if (msg.type === 'reply.done') {
+          setTimeout(() => {
+            setTranscripts((prev) => {
+              const now = Date.now();
+              let changed = false;
+              const next = prev.map((t) => {
+                if (t.isStreaming && now - t.lastDeltaAt > 15000) {
+                  changed = true;
+                  return { ...t, isStreaming: false, finalizedAt: t.finalizedAt || now };
+                }
+                return t;
+              });
+              return changed ? next : prev;
+            });
+          }, 100);
         }
 
         if (msg.type === 'tool_call_start') {
@@ -306,6 +443,20 @@ export function useVoiceSession() {
           }));
         }
 
+        // Local-brain takeover speech: backend forensic core speaks via browser TTS
+        if (msg.type === 'speak_text' && msg.text) {
+          // Gate the mic for the REAL TTS playback duration (speakers would re-capture it)
+          agentSpeakingRef.current = true;
+          speakSynthesis(msg.text, msg.role || 'agent');
+          // Approximate the speaking duration so the UI doesn't flap back to
+          // LISTENING while the TTS is still playing (≈150ms per word).
+          const estMs = Math.min(20000, Math.max(2500, String(msg.text).split(/\s+/).length * 150));
+          setTimeout(() => {
+            agentSpeakingRef.current = false;
+            setAgentState((cur) => (cur === 'SPEAKING' ? 'LISTENING' : cur));
+          }, estMs);
+        }
+
         if (msg.type === 'scenario_meta') {
           setActiveScenarioMeta(msg.scenario);
           setIsScenarioRunning(true);
@@ -329,10 +480,20 @@ export function useVoiceSession() {
     ws.onclose = () => {
       setConnectionStatus('DISCONNECTED');
       setAgentState('IDLE');
+      // Auto-reconnect to backend after connection drop — but never after unmount
+      // (cleanup close() would otherwise schedule reconnects forever → zombie sockets)
+      if (isUnmountedRef.current) return;
+      setTimeout(() => {
+        if (!isUnmountedRef.current) {
+          console.log('[VoiceSession] Attempting auto-reconnect to backend...');
+          connect();
+        }
+      }, 1500);
     };
   }, []);
 
   useEffect(() => {
+    isUnmountedRef.current = false;
     connect();
 
     // Unlock Web Audio context on the user's very first interaction (bypasses browser autoplay lock)
@@ -351,7 +512,7 @@ export function useVoiceSession() {
     }
 
     // Synchronize initial escrow state directly from backend
-    fetch('/api/escrow/latest')
+    fetch(apiUrl('/api/escrow/latest'))
       .then((res) => res.json())
       .then((data) => {
         if (data && data.status) {
@@ -370,12 +531,13 @@ export function useVoiceSession() {
       .catch(() => {});
 
     return () => {
+      isUnmountedRef.current = true;
       window.removeEventListener('click', handleFirstGesture);
       window.removeEventListener('keydown', handleFirstGesture);
       if (wsRef.current) wsRef.current.close();
       stopMic();
     };
-  }, [connect, unlockAudioContext]);
+  }, [connect, unlockAudioContext, flushPlayback]);
 
   const triggerScenario = (scenarioName = 'ferrari_ceo_deepfake', customTuning = null) => {
     unlockAudioContext();
@@ -385,6 +547,7 @@ export function useVoiceSession() {
     setLatestThinking(null);
     setIsScenarioRunning(true);
     isScenarioRunningRef.current = true;
+    isCallStartedRef.current = false;
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -409,29 +572,45 @@ export function useVoiceSession() {
   const startMic = async () => {
     try {
       unlockAudioContext();
-
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'start_call' }));
+      setIsScenarioRunning(false);
+      isScenarioRunningRef.current = false;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
       }
 
-      // 1. Request microphone at 24000Hz (native AssemblyAI Voice Agent sample rate)
+      // Only initiate new call session & greeting if this is a fresh call
+      // If muting/unmuting mid-call, resume existing session without greeting repeat
+      if (!isCallStartedRef.current) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'start_call' }));
+        }
+        isCallStartedRef.current = true;
+      }
+
+      // 1. Request microphone with hardware echo cancellation, noise suppression, and mono channel
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
           sampleRate: 24000
         }
       });
       mediaStreamRef.current = stream;
 
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const audioCtx = new AudioCtx({ sampleRate: 24000 });
+      let audioCtx;
+      try {
+        audioCtx = new AudioCtx({ sampleRate: 24000 });
+      } catch (e) {
+        audioCtx = new AudioCtx();
+      }
       audioContextRef.current = audioCtx;
 
       const source = audioCtx.createMediaStreamSource(stream);
-      // 4096 samples at 24kHz = ~170ms audio chunks
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      // 2048 samples = ~85ms chunks for low-latency streaming
+      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
       processorRef.current = processor;
 
       // Connect through a zero-gain mute node to keep script processor active without feeding mic back to speakers
@@ -449,18 +628,79 @@ export function useVoiceSession() {
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-        const floatData = e.inputBuffer.getChannelData(0);
-        const pcm16 = new Int16Array(floatData.length);
-        for (let i = 0; i < floatData.length; i++) {
-          const s = Math.max(-1, Math.min(1, floatData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        const floatAll = e.inputBuffer.getChannelData(0);
+
+        // Live mic level meter (drives the wave visualizer). Always computed,
+        // even while gated, so the UI can show the agent-speaking state too.
+        let lvlSq = 0;
+        for (let i = 0; i < floatAll.length; i++) lvlSq += floatAll[i] * floatAll[i];
+        const lvlRms = Math.sqrt(lvlSq / floatAll.length);
+        const lvl = Math.min(1, lvlRms * 6);
+        // Throttle React updates to ~12fps — setMicLevel on every audio frame
+        // (23x/sec+) would re-render the whole app tree needlessly.
+        if (!processor._lastLevelPush || Date.now() - processor._lastLevelPush > 80) {
+          processor._lastLevelPush = Date.now();
+          setMicLevel((prev) => prev + (lvl - prev) * 0.35); // smooth EMA for natural motion
         }
 
-        const uint8 = new Uint8Array(pcm16.buffer);
+        // Watchdog: if the half-duplex gate has been shut for >8s with the agent
+        // NOT speaking (e.g. a LISTENING event was lost), force it open again —
+        // otherwise the agent goes permanently deaf mid-conversation.
+        if (agentSpeakingRef.current) {
+          if (!micGateStuckSinceRef.current) micGateStuckSinceRef.current = Date.now();
+          if (Date.now() - micGateStuckSinceRef.current > 8000) {
+            console.warn('[VoiceSession] Half-duplex gate stuck — force reopening mic gate.');
+            agentSpeakingRef.current = false;
+            micGateStuckSinceRef.current = 0;
+          }
+        } else {
+          micGateStuckSinceRef.current = 0;
+        }
+
+        // Half-duplex gate: while the agent is speaking, do not stream mic audio.
+        // Prevents the agent from transcribing its own TTS output (self-interrupt loop)
+        // on speakers — same approach ARIA uses (mic gated with a short tail).
+        if (agentSpeakingRef.current) return;
+
+        const floatData = e.inputBuffer.getChannelData(0);
+        const inRate = audioCtx.sampleRate || 24000;
+
+        // 1. Dynamic resampling: converts hardware mic clock (48kHz/44.1kHz on Mac) to exact 24kHz for AssemblyAI
+        let data24k = floatData;
+        if (inRate !== 24000) {
+          const ratio = inRate / 24000;
+          const outLength = Math.round(floatData.length / ratio);
+          data24k = new Float32Array(outLength);
+          for (let i = 0; i < outLength; i++) {
+            const srcIdx = i * ratio;
+            const idxFloor = Math.floor(srcIdx);
+            const frac = srcIdx - idxFloor;
+            const s1 = floatData[idxFloor] || 0;
+            const s2 = floatData[idxFloor + 1] || s1;
+            data24k[i] = s1 + frac * (s2 - s1);
+          }
+        }
+
+        // 2. Hardware Noise Floor Squelch Gate (filters ambient hiss from polluting STT)
+        let sumSq = 0;
+        for (let i = 0; i < data24k.length; i++) {
+          sumSq += data24k[i] * data24k[i];
+        }
+        const rms = Math.sqrt(sumSq / data24k.length);
+
+        // 3. Convert to 16-bit Linear PCM Little-Endian
+        const pcm16 = new Int16Array(data24k.length);
+        for (let i = 0; i < data24k.length; i++) {
+          const sample = rms < 0.003 ? 0 : Math.max(-1, Math.min(1, data24k[i]));
+          pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        }
+
+        // 4. Native Chunked Base64 Encoding (100x faster than character loop, zero frame drops)
+        const uint8 = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
         let binary = '';
-        const len = uint8.byteLength;
-        for (let i = 0; i < len; i++) {
-          binary += String.fromCharCode(uint8[i]);
+        const chunk = 0x8000;
+        for (let i = 0; i < uint8.length; i += chunk) {
+          binary += String.fromCharCode.apply(null, uint8.subarray(i, i + chunk));
         }
         const base64 = btoa(binary);
 
@@ -480,9 +720,12 @@ export function useVoiceSession() {
 
   const stopMic = () => {
     if (processorRef.current) {
+      processorRef.current.onaudioprocess = null;
       processorRef.current.disconnect();
       processorRef.current = null;
     }
+    agentSpeakingRef.current = false;
+    flushPlayback();
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
@@ -502,6 +745,7 @@ export function useVoiceSession() {
     setAgentState('IDLE');
     setIsScenarioRunning(false);
     isScenarioRunningRef.current = false;
+    isCallStartedRef.current = false;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -516,7 +760,7 @@ export function useVoiceSession() {
       riskLevel: 'NOMINAL',
       reason: null
     });
-    fetch('/api/escrow/reset', { method: 'POST' }).catch(() => {});
+    fetch(apiUrl('/api/escrow/reset'), { method: 'POST' }).catch(() => {});
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'reset_session' }));
     }
@@ -536,6 +780,7 @@ export function useVoiceSession() {
     triggerScenario,
     resetSession,
     startMic,
-    stopMic
+    stopMic,
+    micLevel
   };
 }

@@ -35,6 +35,16 @@
       "typical_range_usd": [25000, 100000],
       "status": "WHITELISTED",
       "verified_since": "2022-11-01"
+    },
+    {
+      "id": "VEND-004",
+      "vendor_name": "Amazon Web Services",
+      "account_number": "4433221100",
+      "bank": "JPMorgan Chase Bank, N.A.",
+      "category": "Cloud Infrastructure",
+      "typical_range_usd": [500, 50000],
+      "status": "WHITELISTED",
+      "verified_since": "2023-03-10"
     }
   ]
 }

@@ -3,7 +3,9 @@ import mockLedger from '../data/mockLedger.json' with { type: 'json' };
 export class LedgerService {
   static verifyCorporateLedger(accountNumber, vendorName = '', amount = 0) {
     const cleanAccount = String(accountNumber || '').replace(/\D/g, '');
-    const numAmount = Number(amount) || 0;
+    const numAmount = typeof amount === 'number'
+      ? amount
+      : (Number(String(amount || '').replace(/[^0-9.]/g, '')) || 0);
 
     const matchedVendor = mockLedger.known_vendors.find(
       (v) => v.account_number === cleanAccount || (vendorName && v.vendor_name.toLowerCase().includes(vendorName.toLowerCase()))

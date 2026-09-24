@@ -10,6 +10,7 @@ import {
   XCircle,
   BellRing
 } from 'lucide-react';
+import { ExecutiveHardwareTokenCard } from './ExecutiveHardwareTokenCard';
 
 export function EscrowStatusCard({ escrowState }) {
   const isFrozen = escrowState.status === 'FROZEN';
@@ -175,6 +176,11 @@ export function EscrowStatusCard({ escrowState }) {
             {escrowState.accountNumber || '--'}
           </span>
         </div>
+      </div>
+
+      {/* Dynamic SOX 404 Executive Hardware Security Token (RFC 6238 TOTP) */}
+      <div className="mt-2.5">
+        <ExecutiveHardwareTokenCard />
       </div>
 
       {/* Compliance & Fraud Interception Audit Card */}

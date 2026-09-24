@@ -9,12 +9,15 @@ import {
   ChevronDown,
   Layers,
   Flame,
-  FileCheck2
+  FileCheck2,
+  Fingerprint
 } from 'lucide-react';
 import { useVoiceSession } from './hooks/useVoiceSession';
 import { LiveVoiceRoom } from './components/LiveVoiceRoom';
+import { VoiceWave } from './components/VoiceWave';
 import { EscrowStatusCard } from './components/EscrowStatusCard';
 import { ReasoningGraphHUD } from './components/ReasoningGraphHUD';
+import { VoiceEnrollmentModal } from './components/VoiceEnrollmentModal';
 
 const SCENARIOS = [
   // 1. Adversarial Attacks
@@ -178,10 +181,12 @@ export default function App() {
     triggerScenario,
     resetSession,
     startMic,
-    stopMic
+    stopMic,
+    micLevel
   } = useVoiceSession();
 
   const [isScenarioMenuOpen, setIsScenarioMenuOpen] = useState(false);
+  const [isEnrollmentOpen, setIsEnrollmentOpen] = useState(false);
 
   const handleToggleMic = () => {
     if (isMicActive) {
@@ -346,8 +351,17 @@ export default function App() {
           )}
         </div>
 
-        {/* Right: Actions (Reset, Mic, Status) */}
-        <div className="flex items-center gap-2.5">
+        {/* Right: Actions (Enroll Voice, Reset, Mic, Status) */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsEnrollmentOpen(true)}
+            title="Enroll / Calibrate Executive Voiceprint (SQLite Vault)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+          >
+            <Fingerprint className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="hidden sm:inline">Enroll Voice</span>
+          </button>
+
           <button
             onClick={resetSession}
             title="Reset active call and escrow state"
@@ -399,6 +413,7 @@ export default function App() {
             isScenarioRunning={isScenarioRunning}
             latestThinking={latestThinking}
             activeScenarioMeta={activeScenarioMeta}
+            micLevel={micLevel}
             onToggleMic={handleToggleMic}
             onTriggerScenario={triggerScenario}
             onReset={resetSession}
@@ -417,6 +432,12 @@ export default function App() {
           />
         </div>
       </main>
+
+      {/* 3. Executive Voiceprint Enrollment Modal (SQLite Biometric Vault) */}
+      <VoiceEnrollmentModal
+        isOpen={isEnrollmentOpen}
+        onClose={() => setIsEnrollmentOpen(false)}
+      />
     </div>
   );
 }

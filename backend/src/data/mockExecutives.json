@@ -11,16 +11,40 @@
         {
           "challenge_id": "CHAL-RS1",
           "question": "Please state the confidential codename of the European acquisition discussed during last Thursday's closed board meeting.",
-          "valid_keywords": ["project olympus", "olympus", "apex europe", "project apex"],
+          "valid_keywords": [
+            "project olympus",
+            "olympus",
+            "apex europe",
+            "project apex"
+          ],
           "clue": "Mythological mountain codename"
         },
         {
           "challenge_id": "CHAL-RS2",
           "question": "What is today's 4-digit emergency out-of-band wire authorization PIN displayed in your hardware token?",
-          "valid_keywords": ["7782", "778210", "pin 7782"],
+          "valid_keywords": [
+            "7782",
+            "778210",
+            "pin 7782"
+          ],
           "clue": "Hardware token passcode"
         }
-      ]
+      ],
+      "enrolled_voiceprint": {
+        "status": "ENROLLED",
+        "sample_duration_sec": 60,
+        "sample_date": "2025-11-12",
+        "f0_target_hz": 108.5,
+        "f0_range_hz": [
+          85,
+          145
+        ],
+        "formant_f1_hz": 500,
+        "formant_f2_hz": 1350,
+        "vocal_timbre": "DEEP_BARITONE (LONG_VOCAL_TRACT)",
+        "jitter_baseline_pct": 0.92,
+        "notes": "Verified male executive voiceprint with natural glottal resonance."
+      }
     },
     {
       "id": "EXEC-002",
@@ -33,10 +57,40 @@
         {
           "challenge_id": "CHAL-ER1",
           "question": "Confirm the official name of the audit firm currently performing our Q3 compliance review.",
-          "valid_keywords": ["deloitte", "pwc", "kpmg", "ernst"],
+          "valid_keywords": [
+            "deloitte",
+            "pwc",
+            "kpmg",
+            "ernst"
+          ],
           "clue": "Big Four Accounting Firm"
+        },
+        {
+          "challenge_id": "CHAL-ER2",
+          "question": "What is today's 4-digit emergency out-of-band wire authorization PIN displayed in your hardware token?",
+          "valid_keywords": [
+            "4422",
+            "442210",
+            "pin 4422"
+          ],
+          "clue": "Hardware token passcode"
         }
-      ]
+      ],
+      "enrolled_voiceprint": {
+        "status": "ENROLLED",
+        "sample_duration_sec": 45,
+        "sample_date": "2025-10-05",
+        "f0_target_hz": 195,
+        "f0_range_hz": [
+          160,
+          240
+        ],
+        "formant_f1_hz": 620,
+        "formant_f2_hz": 1850,
+        "vocal_timbre": "MEZZO_SOPRANO (SHORT_VOCAL_TRACT)",
+        "jitter_baseline_pct": 0.88,
+        "notes": "Verified female executive voiceprint with clear phonetic inflections."
+      }
     }
   ]
 }
