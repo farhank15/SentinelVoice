@@ -31,7 +31,8 @@ Metode ini menggunakan file [`Dockerfile`](file:///Users/mawa/Development/my_pro
 5. Gulir ke bawah ke bagian **Environment Variables** dan tambahkan:
    - `ASSEMBLYAI_API_KEY`: *(API Key AssemblyAI Anda)*
    - `LLM_API_KEY`: *(API Key Poolside Laguna S Anda, diawali `sky_...`)*
-   - `GEMINI_API_KEY`: *(Opsional, fallback LLM)*
+   - `GEMINI_API_KEY`: *(Opsional, primary fallback LLM)*
+   - `GEMINI_API_KEY2`: *(Opsional, secondary fallback LLM jika key 1 limit/exhausted)*
    - `NODE_ENV`: `production`
 6. (Opsional) Di bagian **Advanced**:
    - **Health Check Path**: `/api/health`
@@ -66,6 +67,8 @@ Jika Anda ingin memisahkan Frontend dan Backend menjadi 2 service terpisah di Re
 7. **Environment Variables**:
    - `ASSEMBLYAI_API_KEY`: `<key>`
    - `LLM_API_KEY`: `<sky_key>`
+   - `GEMINI_API_KEY`: `<gemini_key_1>` (Opsional)
+   - `GEMINI_API_KEY2`: `<gemini_key_2>` (Opsional)
    - `NODE_ENV`: `production`
    *(Catatan: Render otomatis menyuntikkan `PORT`, Fastify backend sudah otomatis membaca `process.env.PORT`)*
 8. Klik **Create Web Service**, lalu catat URL Backend yang didapat (misal: `https://sentinel-backend.onrender.com`).

@@ -1,6 +1,9 @@
 node_modules
 .env
 .env.*
+!.env.example
+!*.env.example
+!backend/.env.example
 backend/.env
 frontend/.env
 .DS_Store
