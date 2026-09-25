@@ -1,8 +1,40 @@
+import crypto from 'node:crypto';
+
 const parseCleanAmount = (val) => {
   if (typeof val === 'number') return val;
   const cleaned = String(val || '').replace(/[^0-9.]/g, '');
   return Number(cleaned) || 0;
 };
+
+/**
+ * N12: SIEM Audit Trail — chained SHA-256 evidence digest (tamper-evident).
+ * Each entry commits to the previous digest (blockchain-style chaining) so any
+ * retroactive modification of the evidence trail breaks verification.
+ * Standard: SEC Rule 17a-4 / FINRA 4511 record integrity.
+ */
+function appendEvidence(tx, event, details) {
+  const prevDigest = tx.evidence_trail.length
+    ? tx.evidence_trail[tx.evidence_trail.length - 1].digest
+    : 'GENESIS';
+  const timestamp = new Date().toISOString();
+  const payload = `${prevDigest}|${timestamp}|${event}|${details}`;
+  const digest = crypto.createHash('sha256').update(payload).digest('hex');
+  tx.evidence_trail.push({ timestamp, event, details, digest });
+  tx.audit_chain_head = digest;
+  return digest;
+}
+
+function verifyEvidenceChain(tx) {
+  let prevDigest = 'GENESIS';
+  for (const entry of tx.evidence_trail) {
+    const expected = crypto.createHash('sha256')
+      .update(`${prevDigest}|${entry.timestamp}|${entry.event}|${entry.details}`)
+      .digest('hex');
+    if (expected !== entry.digest) return false;
+    prevDigest = entry.digest;
+  }
+  return true;
+}
 
 export class EscrowService {
   static transactions = new Map();
@@ -52,11 +84,7 @@ export class EscrowService {
     tx.risk_level = riskLevel;
     tx.frozen_at = new Date().toISOString();
     tx.freeze_reason = reason;
-    tx.evidence_trail.push({
-      timestamp: new Date().toLocaleTimeString('en-US'),
-      event: 'EMERGENCY_FREEZE_TRIGGERED',
-      details: reason
-    });
+    appendEvidence(tx, 'EMERGENCY_FREEZE_TRIGGERED', reason);
 
     return {
       status: 'SUCCESS_FROZEN',
@@ -77,11 +105,7 @@ export class EscrowService {
     tx.risk_level = 'LOW';
     tx.released_at = new Date().toISOString();
     tx.approval_code = approvalCode;
-    tx.evidence_trail.push({
-      timestamp: new Date().toLocaleTimeString('en-US'),
-      event: 'ESCROW_RELEASED',
-      details: `Authorized with code: ${approvalCode}`
-    });
+    appendEvidence(tx, 'ESCROW_RELEASED', `Authorized with code: ${approvalCode}`);
 
     return {
       status: 'SUCCESS_RELEASED',
@@ -90,6 +114,17 @@ export class EscrowService {
       funds_released_amount_usd: tx.amount_usd,
       action_taken: "Wire transfer successfully authorized and released to clearing queue."
     };
+  }
+
+  /**
+   * N12 verifier: recomputes the full evidence chain — used by the audit
+   * endpoint and tests to prove the trail has not been tampered with.
+   */
+  static verifyAuditTrail(txId = null) {
+    const targetId = txId || Array.from(this.transactions.keys()).pop();
+    const tx = targetId ? this.transactions.get(targetId) : null;
+    if (!tx) return { exists: false, intact: false };
+    return { exists: true, intact: verifyEvidenceChain(tx), chain_head: tx.audit_chain_head || null };
   }
 
   static getLatestTransaction() {

@@ -2,6 +2,35 @@ import { describe, expect, it } from 'bun:test';
 import { LedgerService } from '../src/services/ledgerService.js';
 import { EscrowService } from '../src/services/escrowService.js';
 
+describe('N7 AML/OFAC Screening & N12 Immutable Audit Chain', () => {
+  it('N7. OFAC restricted account is blocked before any ERP verdict (SANCTION_MATCH, risk 99)', () => {
+    const res = LedgerService.verifyCorporateLedger('7755332211', 'Unknown Shell', 250000);
+    expect(res.status).toBe('OFAC_SANCTION_MATCH');
+    expect(res.risk_score).toBe(99);
+    expect(res.ofac_screening.match).toBe(true);
+  });
+
+  it('N7. Clean whitelisted vendor carries a passed OFAC screening result', () => {
+    const res = LedgerService.verifyCorporateLedger('9876543210', 'Apex Cloud Infrastructure Inc.', 45000);
+    expect(res.status).toBe('VERIFIED_NORMAL');
+    expect(res.ofac_screening.screened).toBe(true);
+    expect(res.ofac_screening.match).toBe(false);
+  });
+
+  it('N12. Evidence trail is SHA-256 chained and tamper-evident (verifyAuditTrail)', () => {
+    const tx = EscrowService.initializeTransaction({ vendor_name: 'Apex Cloud Infrastructure Inc.', amount_usd: 45000 });
+    EscrowService.releaseEscrowTransfer('TOTP-123456', tx.tx_id);
+    const audit = EscrowService.verifyAuditTrail(tx.tx_id);
+    expect(audit.exists).toBe(true);
+    expect(audit.intact).toBe(true);
+    expect(audit.chain_head).toMatch(/^[a-f0-9]{64}$/);
+
+    // Tamper simulation: modifying a historical entry must break the chain
+    tx.evidence_trail[0].details = 'TAMPERED ENTRY';
+    expect(EscrowService.verifyAuditTrail(tx.tx_id).intact).toBe(false);
+  });
+});
+
 describe('Corporate Ledger & Treasury Escrow State Machine (SOX 404)', () => {
   it('1. Robust Currency Parsing: Handles formatted strings ($115,000, 115,000 USD, 115000)', () => {
     const resDollar = LedgerService.verifyCorporateLedger('482910492', 'Deloitte', '$115,000.00');

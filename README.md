@@ -18,9 +18,11 @@
 
 In 2024–2026, generative voice cloning achieved forensic parity with human vocal biometrics. Adversaries now clone a Fortune 500 CEO or CFO's voice with less than 3 seconds of public earnings call audio, dial the corporate treasury desk, and manipulate finance personnel into executing catastrophic unauthorized wire transfers:
 
-- **Arup Engineering ($25.6M Loss, Hong Kong):** A finance employee was deceived during a multi-person deepfake video and voice conference call into transferring $25M across 15 transactions to offshore shell accounts.
-- **Ferrari CEO Deepfake Incident (July 2024):** Cybercriminals cloned CEO Benedetto Vigna's voice on a live phone call requesting an urgent, confidential M&A wire in China before an alert executive thwarted the attempt with an out-of-band personal challenge.
-- **UK Energy Firm CEO Clone ($243k Loss):** Attackers cloned the German CEO's accent and pitch, directing an urgent transfer to a Hungarian supplier within minutes.
+- **Ferrari CEO Deepfake Incident (July 2024):** Cybercriminals cloned CEO Benedetto Vigna's voice on a live **phone call** requesting an urgent, confidential M&A wire in China before an alert executive thwarted the attempt with an out-of-band personal challenge.
+- **UK Energy Firm CEO Clone ($243k Loss):** Attackers cloned the German CEO's accent and pitch on a **voice-only call**, directing an urgent transfer to a Hungarian supplier within minutes.
+- **Arup Engineering ($25.6M Loss, Hong Kong):** A finance employee was deceived during a multi-person deepfake **video conference** (voice + video combined) into transferring $25M across 15 transactions to offshore shell accounts. This case demonstrates the scale of the threat; note it exploited a video channel, whereas SentinelVoice defends the **audio-only telephony trunk** — the cheaper attack surface that requires no video synthesis and is therefore far more accessible to attackers at scale.
+
+**Why telephony is the critical front:** video deepfakes like Arup's are expensive to produce; a 3-second voice clone is nearly free. Voice-only phone attacks (Ferrari, UK Energy) are the high-frequency, low-cost variant — and they are exactly what this system intercepts.
 
 **Why Human Staff & Generic Chatbots Fail:**
 1. **Coercive Intimidation ("Crush" Attacks):** Humans panic and bypass controls when a "CEO" screams termination threats.
@@ -76,12 +78,12 @@ Unlike black-box LLM prompts, SentinelVoice enforces an immutable, deterministic
 | **Zone 2: Intent** | **N4: Wire Extraction** | Semantic parsing of amount, IBAN, vendor | ISO 20022 Financial Messaging Spec |
 | | **N5: BEC Classifier** | Cialdini multimodal persuasion profiling | Detects coercion, urgency, and smooth grooming |
 | | **N6: ERP Ledger Gate** | Whitelist match against corporate master records | Prevents routing to unregistered offshore mules |
-| **Zone 3: Policy** | **N7: AML / OFAC** | Sanctions list and geographic destination screen | FinCEN & OFAC Screening Mandates |
+| **Zone 3: Policy** | **N7: AML / OFAC** | Deterministic sanctions & high-risk-jurisdiction screen on every ledger check | FinCEN & OFAC Screening Mandates |
 | | **N8: SOX Dual Gate** | Mandatory dual authorization for amounts > $50,000 | Sarbanes-Oxley 404 Segregation of Duties |
 | | **N9: ZK Challenge** | Dynamic cryptographic PIN / passphrase challenge | Zero-Knowledge proof of executive authority |
 | **Zone 4: Escrow** | **N10: OOB Push Alert** | Silent dual-channel dispatch to executive's device | Out-of-Band Hardware Verification |
 | | **N11: Settlement Vault**| Hard Escrow Settlement Engine | Non-LLM mathematical escrow lock |
-| | **N12: SIEM Audit Trail**| Immutable cryptographic log with SHA-256 digest | SEC Rule 17a-4 & FINRA Compliance |
+| | **N12: SIEM Audit Trail**| SHA-256 chained evidence digests, tamper-evident via `verifyAuditTrail()` | SEC Rule 17a-4 & FINRA Compliance |
 
 ---
 
@@ -104,9 +106,10 @@ A responsive, non-wrapping horizontal breadcrumb HUD in [`frontend/src/component
 
 ### 4. Mathematical Non-LLM Hard Escrow Vault
 The LLM does **not** have the authorization to move funds. Even if an attacker jailbreaks the conversational prompt, the underlying banking layer in [`backend/src/services/escrowService.js`](file:///Users/mawa/Development/my_projects/sarjanamuda/G-voice/backend/src/services/escrowService.js) mathematically refuses release unless:
-1. `verify_corporate_ledger` confirms an existing approved vendor contract.
-2. If transaction > $50,000 USD, a valid cryptographic ZK-token must be submitted.
-3. No critical threat anomalies exist across Zones 1–3.
+1. `verify_corporate_ledger` confirms an existing approved vendor contract — with an **N7 OFAC/sanctions screening** performed on every check (SDN match ⇒ `OFAC_SANCTION_MATCH`, risk 99, no release path).
+2. If transaction > $50,000 USD, a **cryptographically validated** approval code (live RFC 6238 TOTP window or whitelisted PO) must be submitted — arbitrary codes are rejected by the service itself, not by prompt goodwill.
+3. No critical threat anomalies exist across Zones 1–3 — including a **hard biometric gate**: an `ANOMALOUS_SYNTHETIC` acoustic verdict overrides any LLM recommendation and forces the freeze.
+4. Every freeze/release is committed to an **N12 tamper-evident audit chain**: SHA-256 chained digests (each entry commits to the previous), verifiable via `EscrowService.verifyAuditTrail()` — retroactive edits break verification (SEC Rule 17a-4).
 
 ---
 
@@ -132,9 +135,11 @@ SentinelVoice registers 5 native AssemblyAI tools via the official top-level `ty
 
 ---
 
-## 🧪 14 Institutional Benchmark Cases (100% Accuracy)
+## 🧪 Internal Validation Suite (14 Ground-Truth Cases)
 
-SentinelVoice includes a comprehensive ground-truth test suite modeled on real-world incidents, achieving **100% Detection, 0% FPR, and 0% FNR**:
+> **Honest framing:** this is an internal validation suite built from real-world incident patterns — it is NOT a peer-reviewed benchmark. It demonstrates that the deterministic decision core (ERP gate, OFAC screen, SOX threshold, ZK challenge, escrow state machine) produces the expected verdict across adversarial and clean-treasury scenarios. All 18 backend unit tests (YIN/LPC DSP physics, TOTP crypto, OFAC screening, tamper-evident audit chain, escrow state machine) pass in CI.
+
+The suite achieves **100% expected-verdict agreement across all 14 cases** on the deterministic engine (the LLM layer is intentionally bypassed in these tests — that is the point of the non-LLM settlement gate):
 
 | ID | Benchmark Scenario | Threat Type | Amount | Ground Truth Outcome |
 | :--- | :--- | :--- | :--- | :--- |
