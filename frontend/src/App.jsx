@@ -76,17 +76,17 @@ const SCENARIOS = [
     key: 'smooth_polite_ceo_clone',
     name: 'Ultra-Smooth Polite CEO ($190k)',
     group: 'ADVERSARIAL_ATTACK',
-    reference: 'Zero-Coercion Soft Diplomacy Clone (Halus)',
+    reference: 'Zero-Coercion Soft Diplomacy Clone',
     amount: '$190,000',
     type: 'threat',
-    badge: 'Skenario Halus'
+    badge: 'Soft Diplomacy'
   },
   {
     id: 'TC-12',
     key: 'multiturn_executive_payroll_grooming',
     name: 'Payroll Diversion (4 Turns)',
     group: 'ADVERSARIAL_ATTACK',
-    reference: 'Multi-Turn Persona Grooming (Panjang)',
+    reference: 'Multi-Turn Persona Grooming (Extended)',
     amount: '$340,000',
     type: 'threat',
     badge: '4-Turn Grooming'

@@ -476,6 +476,12 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
     for (let turnIdx = 0; turnIdx < scenario.turns.length; turnIdx++) {
       const turn = scenario.turns[turnIdx];
 
+      // Per-turn replyIds: the frontend keys streaming bubbles by replyId, so
+      // every simulated turn MUST carry a unique id or turn 2 rewrites turn 1's
+      // bubble instead of appending a new one.
+      const callerReplyId = `sim_${scenario.id}_t${turnIdx}_caller`;
+      const agentReplyId = `sim_${scenario.id}_t${turnIdx}_agent`;
+
       // A. Stream caller speech word-by-word with natural conversational cadence
       const callerWords = turn.speech.split(' ');
       for (let w = 0; w < callerWords.length; w++) {
@@ -485,7 +491,8 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
           role: 'caller',
           speaker: turn.speaker,
           text: delta,
-          mode: 'append'
+          mode: 'append',
+          replyId: callerReplyId
         });
 
         // Real-time progressive DAG node signal flow across Zone 1 during audio ingress
@@ -520,6 +527,7 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
         role: 'caller',
         speaker: turn.speaker,
         text: turn.speech,
+        replyId: callerReplyId,
         timestamp: new Date().toLocaleTimeString('en-US')
       });
       history.push({ speaker: turn.speaker, text: turn.speech });
@@ -664,6 +672,9 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
       }
 
       // E. Agent speaks back word-by-word with natural voice cadence
+      // ~120ms/word: browser TTS speaks slower than text reveal — pacing the
+      // deltas near TTS cadence prevents the next turn from stacking on top of
+      // audio that is still playing ("voices racing/overlapping" bug).
       onProgress({ type: 'agent_state', state: 'SPEAKING' });
       const agentWords = evaluation.speech_response.split(' ');
       for (let w = 0; w < agentWords.length; w++) {
@@ -673,9 +684,10 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
           role: 'agent',
           speaker: 'SentinelVoice AI',
           text: delta,
-          mode: 'append'
+          mode: 'append',
+          replyId: agentReplyId
         });
-        await new Promise((r) => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 120));
       }
 
       onProgress({
@@ -683,12 +695,13 @@ REQUIRED JSON OUTPUT FORMAT (Strict raw valid JSON only, no markdown wrapping):
         role: 'agent',
         speaker: 'SentinelVoice AI',
         text: evaluation.speech_response,
+        replyId: agentReplyId,
         timestamp: new Date().toLocaleTimeString('en-US')
       });
       history.push({ speaker: 'SentinelVoice AI', text: evaluation.speech_response });
 
-      // Natural pause before next turn
-      await new Promise((r) => setTimeout(r, 1400));
+      // Natural pause before next turn — let TTS finish its tail
+      await new Promise((r) => setTimeout(r, 2200));
     }
 
     // F. Log immutable audit trail to N12

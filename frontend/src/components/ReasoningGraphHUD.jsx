@@ -1015,7 +1015,7 @@ export function ReasoningGraphHUD({
               {activeAttackProfile.includes('CRUSH')
                 ? 'Coercive dominance pattern: hostile reprimands, manufactured urgency, and termination threats designed to bypass dual-control checks.'
                 : activeAttackProfile.includes('SMOOTH')
-                ? 'Soft diplomacy pattern (Halus): polite rapport, high liking, and plausible excuses to evade hardware token authentication.'
+                ? 'Soft diplomacy pattern: polite rapport, high liking, and plausible excuses to evade hardware token authentication.'
                 : activeAttackProfile.includes('BUREAUCRATIC')
                 ? 'Institutional impersonator: hallucinated audit firms, routing deviations, and fake procedural pretexts.'
                 : activeAttackProfile.includes('SYNTHETIC')
@@ -1249,7 +1249,7 @@ export function ReasoningGraphHUD({
                 <tr className="hover:bg-slate-50">
                   <td className="py-1.5 px-2.5 font-bold text-rose-700">TC-11</td>
                   <td className="py-1.5 px-2.5 font-sans">
-                    <span>Ultra-Smooth Polite CEO (Halus)</span>
+                    <span>Ultra-Smooth Polite CEO (Soft Diplomacy)</span>
                     <span className="ml-1 text-[9px] px-1 py-0.2 bg-rose-50 text-rose-600 rounded">Zero Coercion</span>
                   </td>
                   <td className="py-1.5 px-2.5">$190k</td>
@@ -1266,7 +1266,7 @@ export function ReasoningGraphHUD({
                 <tr className="hover:bg-slate-50">
                   <td className="py-1.5 px-2.5 font-bold text-rose-700">TC-12</td>
                   <td className="py-1.5 px-2.5 font-sans">
-                    <span>Executive Payroll Diversion (Panjang)</span>
+                    <span>Executive Payroll Diversion (Extended)</span>
                     <span className="ml-1 text-[9px] px-1 py-0.2 bg-amber-50 text-amber-600 rounded">4 Turns</span>
                   </td>
                   <td className="py-1.5 px-2.5">$340k</td>

@@ -230,14 +230,32 @@ export function useVoiceSession() {
         }
 
         if (msg.type === 'transcript_delta') {
-          // Merge streaming deltas into ONE bubble keyed by replyId (agent replies)
-          // or role (caller partials). This guarantees a long spoken paragraph stays
-          // a single bubble instead of spawning duplicates.
+          // Merge streaming deltas into ONE bubble keyed by replyId (per-turn in
+          // simulation, per-reply live). STRICT RULE: a bubble that is already
+          // finalized must NEVER be rewritten — a delta for a finalized key means
+          // a NEW turn reusing the key, so spawn a fresh bubble instead (keeps
+          // multi-turn scenario transcripts as a growing list, not a rewrite).
           const streamKey = msg.replyId || `role_${msg.role}`;
           setTranscripts((prev) => {
             const idx = prev.findIndex((t) => t.streamKey === streamKey);
             if (idx !== -1) {
               const target = prev[idx];
+              if (!target.isStreaming) {
+                // Finalized bubble with same key: start a NEW bubble (turn boundary)
+                return [
+                  ...prev,
+                  {
+                    id: `stream_${Date.now()}_${Math.random()}`,
+                    streamKey: `${streamKey}_${Date.now()}`, // unique key — never re-collide
+                    role: msg.role,
+                    speaker: msg.speaker || (msg.role === 'agent' ? 'SentinelVoice AI' : 'Caller (Live Voice)'),
+                    text: msg.text || '',
+                    isStreaming: true,
+                    lastDeltaAt: Date.now(),
+                    timestamp: new Date().toLocaleTimeString('en-US')
+                  }
+                ];
+              }
               const needsSpace = msg.mode === 'append' &&
                 target.text.length > 0 &&
                 !target.text.endsWith(' ') &&
@@ -283,17 +301,22 @@ export function useVoiceSession() {
               next[idx] = {
                 ...next[idx],
                 text: msg.text, // authoritative full text (also fixes partial concat drift)
-                isStreaming: false
+                isStreaming: false,
+                finalizedAt: Date.now()
               };
               return next;
             }
-            // No matching streaming bubble (e.g. final arrived without deltas)
-            // Caller turns can arrive as multiple finals with different item_ids
-            // (VAD splits, duplicate transcript.user emissions). Merge anything
-            // finalized within the last 4s for the same role into ONE bubble.
-            const lastSameRole = [...prev].reverse().find((t) => t.role === msg.role && !t.isStreaming);
-            if (lastSameRole && Date.now() - (lastSameRole.finalizedAt || 0) < 4000) {
-              return prev.map((t) => t.id === lastSameRole.id ? { ...t, text: msg.text, finalizedAt: Date.now() } : t);
+            // No matching streaming bubble (e.g. final arrived without deltas).
+            // LIVE MIC ONLY: caller finals can arrive in quick succession with
+            // different item_ids (VAD splits, duplicate transcript.user) — merge
+            // those into one bubble. In SCENARIO mode every turn carries a unique
+            // replyId, so a finalized same-role bubble means a NEW turn -> append.
+            const isScenarioTurn = Boolean(msg.replyId && msg.replyId.startsWith('sim_'));
+            if (!isScenarioTurn) {
+              const lastSameRole = [...prev].reverse().find((t) => t.role === msg.role && !t.isStreaming);
+              if (lastSameRole && Date.now() - (lastSameRole.finalizedAt || 0) < 4000) {
+                return prev.map((t) => t.id === lastSameRole.id ? { ...t, text: msg.text, finalizedAt: Date.now() } : t);
+              }
             }
             return [
               ...prev,
@@ -310,8 +333,12 @@ export function useVoiceSession() {
             ];
           });
 
-          // In simulation scenarios, synthesize speech aloud through browser TTS
-          if (isScenarioRunningRef.current && msg.text) {
+          // In simulation scenarios, only the AGENT speaks aloud. Voicing both
+          // sides floods the speechSynthesis queue — caller TTS is still playing
+          // when the agent's final arrives, so cancel() cuts it mid-word and the
+          // two voices race/overlap. Agent-only audio matches a real call (the
+          // caller side reads as transcript text).
+          if (isScenarioRunningRef.current && msg.text && msg.role === 'agent') {
             speakSynthesis(msg.text, msg.role);
           }
 
@@ -321,6 +348,16 @@ export function useVoiceSession() {
               // and the mic gate (real TTS playback time, not event timing).
               // Forcing LISTENING here would open the gate while browser TTS is
               // still playing -> mic re-captures the TTS -> echo loop.
+            } else if (isScenarioRunningRef.current) {
+              // Simulation: TTS is still playing the response — hold SPEAKING for
+              // the estimated playback duration so the UI doesn't flip to
+              // LISTENING mid-speech (matches what the user hears).
+              agentSpeakingRef.current = true;
+              const estMs = Math.min(20000, Math.max(1500, String(msg.text || '').split(/\s+/).length * 140));
+              setTimeout(() => {
+                agentSpeakingRef.current = false;
+                setAgentState((cur) => (cur === 'SPEAKING' ? 'LISTENING' : cur));
+              }, estMs);
             } else {
               agentSpeakingRef.current = false;
               setAgentState('LISTENING'); // reply fully delivered — no artificial 3.5s freeze
