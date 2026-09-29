@@ -14,6 +14,17 @@ export const getWsUrl = () => {
   return `${protocol}//${targetHost}/ws/voice-session`;
 };
 
+// Backend UI event bus for stored-agent mode (tool calls, escrow, forensics).
+export const getAgentEventsWsUrl = () => {
+  const envWs = import.meta.env?.VITE_WS_URL;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const isDev = window.location.port === '5173';
+  const targetHost = envWs
+    ? new URL(envWs).host
+    : (isDev ? `${window.location.hostname}:8000` : window.location.host);
+  return `${protocol}//${targetHost}/ws/agent-events`;
+};
+
 export const apiUrl = (endpoint) => {
   const base = getApiBase();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;

@@ -12,6 +12,7 @@ import { LLMGatewayService } from './services/llmGatewayService.js';
 import { SCENARIOS_MATRIX, getScenarioByKey } from './services/scenarioMatrix.js';
 import { TuningService } from './services/tuningService.js';
 import { ReasoningEngine } from './services/reasoningEngine.js';
+import { ToolDispatcher } from './services/toolDispatcher.js';
 import { VoiceprintRepository } from './services/voiceprintRepository.js';
 import { AcousticDspService } from './services/acousticService.js';
 import { ChallengeService } from './services/challengeService.js';
@@ -28,6 +29,37 @@ const fastify = Fastify({
     }
   }
 });
+
+// ---- Stored-agent mode: UI event hub -------------------------------------
+// Browser connects DIRECTLY to AssemblyAI (temporary token + agent_id), so the
+// backend no longer sits on the audio path. UI subscribers (dashboard, console
+// page) attach here; REST tool endpoints publish forensic events to this hub.
+const uiEventHub = {
+  _subs: new Set(),
+  add(socket) {
+    this._subs.add(socket);
+  },
+  remove(socket) {
+    this._subs.delete(socket);
+  },
+  publish(event) {
+    const payload = JSON.stringify({ ...event, timestamp: event.timestamp || new Date().toLocaleTimeString('en-US') });
+    for (const s of this._subs) {
+      try {
+        if (s.readyState === 1) s.send(payload);
+      } catch (e) {}
+    }
+  }
+};
+
+function readStoredAgentId() {
+  try {
+    const id = fs.readFileSync(path.resolve(process.cwd(), '.agent-id'), 'utf8').trim();
+    return id || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 // Enable CORS for frontend
 await fastify.register(fastifyCors, {
@@ -52,6 +84,12 @@ if (FRONTEND_DIST) {
   await fastify.register(fastifyStatic, {
     root: FRONTEND_DIST,
     prefix: '/'
+  });
+  // Backend-owned static assets (agent-console.html test page)
+  await fastify.register(fastifyStatic, {
+    root: path.resolve(SERVER_DIR, '../public'),
+    prefix: '/public/',
+    decorateReply: false
   });
 
   // SPA fallback for client-side routing, preserving API and WebSocket endpoints
@@ -85,9 +123,72 @@ fastify.get('/api/health', async () => {
     agent_core_version: AGENT_CORE_VERSION, // verify the running process is not stale
     timestamp: new Date().toISOString(),
     assembly_key_configured: Boolean(process.env.ASSEMBLYAI_API_KEY && process.env.ASSEMBLYAI_API_KEY !== 'your_assemblyai_api_key_here'),
+    stored_agent_id: readStoredAgentId(),
+    stored_agent_console: '/public/agent-console.html',
     llm: LLMGatewayService.getProviderInfo()
   };
 });
+
+// ---- Stored-agent mode: temporary browser token ---------------------------
+// Mints a single-use 5-minute token; the ASSEMBLYAI_API_KEY never leaves the
+// backend. Docs: https://www.assemblyai.com/docs/voice-agents/voice-agent-api/browser-integration
+fastify.get('/api/voice-token', async (req, reply) => {
+  const key = process.env.ASSEMBLYAI_API_KEY;
+  if (!key || key === 'your_assemblyai_api_key_here') {
+    return reply.code(503).send({ error: 'ASSEMBLYAI_API_KEY not configured' });
+  }
+  const url = new URL('https://agents.assemblyai.com/v1/token');
+  url.searchParams.set('expires_in_seconds', '300');
+  url.searchParams.set('max_session_duration_seconds', '3600');
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
+  if (!res.ok) {
+    return reply.code(res.status).send({ error: 'Token mint failed', detail: await res.text() });
+  }
+  const { token } = await res.json();
+  return { token };
+});
+
+// Stored-agent status (which agent id will the console page bind to)
+fastify.get('/api/agent/status', async () => {
+  return {
+    stored_agent_id: readStoredAgentId(),
+    published: Boolean(readStoredAgentId()),
+    publish_hint: 'bun scripts/publish-agent.mjs  (requires PUBLIC_BASE_URL, e.g. cloudflared tunnel)'
+  };
+});
+
+// ---- Stored-agent mode: HTTP tool endpoints -------------------------------
+// AssemblyAI calls these server-to-server when the stored agent's tools fire.
+// All executions go through ToolDispatcher so escrow/ledger state stays
+// identical to the legacy relay path.
+const toolAuth = async (req, reply) => {
+  const expected = process.env.TOOL_WEBHOOK_TOKEN;
+  if (!expected) return; // open in dev — AssemblyAI needs a public reachable URL
+  const auth = req.headers.authorization || '';
+  if (auth !== `Bearer ${expected}`) {
+    return reply.code(401).send({ error: 'Unauthorized tool call' });
+  }
+};
+
+const toolRoute = (toolName) => async (req) => {
+  const args = req.body || {};
+  let result;
+  try {
+    result = ToolDispatcher.execute(toolName, args);
+  } catch (err) {
+    result = { error: err.message };
+  }
+  uiEventHub.publish({ type: 'tool_call_start', toolName, args });
+  uiEventHub.publish({ type: 'tool_call_end', toolName, result });
+  return result;
+};
+
+fastify.post('/api/tools/verify-ledger', { preHandler: toolAuth }, toolRoute('verify_corporate_ledger'));
+fastify.post('/api/tools/issue-challenge', { preHandler: toolAuth }, toolRoute('issue_security_challenge'));
+fastify.post('/api/tools/validate-challenge', { preHandler: toolAuth }, toolRoute('validate_security_challenge'));
+fastify.post('/api/tools/out-of-band', { preHandler: toolAuth }, toolRoute('trigger_out_of_band_verification'));
+fastify.post('/api/tools/freeze-escrow', { preHandler: toolAuth }, toolRoute('emergency_escrow_freeze'));
+fastify.post('/api/tools/release-escrow', { preHandler: toolAuth }, toolRoute('release_escrow_transfer'));
 
 // LLM Provider Status
 fastify.get('/api/llm/status', async () => {
@@ -262,7 +363,20 @@ fastify.post('/api/voiceprint/enroll', async (req) => {
   };
 });
 
-// WebSocket Voice Session Route
+// UI event bus for stored-agent mode (dashboard listens here while the browser
+// voice channel runs directly against AssemblyAI)
+fastify.register(async function (fastifyInstance) {
+  fastifyInstance.get('/ws/agent-events', { websocket: true }, (socket) => {
+    uiEventHub.add(socket);
+    socket.send(JSON.stringify({
+      type: 'escrow_update',
+      transaction: EscrowService.getLatestTransaction()
+    }));
+    socket.on('close', () => uiEventHub.remove(socket));
+  });
+});
+
+// WebSocket Voice Session Route (legacy relay mode — still fully functional)
 fastify.register(async function (fastifyInstance) {
   fastifyInstance.get('/ws/voice-session', { websocket: true }, (socket, req) => {
     fastify.log.info('[SentinelVoice] New Browser WebSocket Connection opened.');

@@ -14,10 +14,13 @@ import mockLedger from '../data/mockLedger.json' with { type: 'json' };
 /**
  * Agent core version — logged at startup and on every call init so a stale
  * backend process is instantly identifiable in logs.
- * v2.1: tool.result drain on reply.done, empty-reply stall detection,
- * local-brain takeover, Gemini fallback, resume recovery.
+ * v2.3: resume recovery, Gemini fallback, tool.result drain.
+ * v2.4: greeting no longer replayed on reconnect (re-greeting loop fix),
+ *       nudge dedupe, balanced transcription + official turn-detection defaults.
+ * v2.5: STORED-AGENT MODE — /api/voice-token, /api/tools/* HTTP endpoints,
+ *       /ws/agent-events UI hub, publish CLI, browser console (public/).
  */
-export const AGENT_CORE_VERSION = '2.3.0';
+export const AGENT_CORE_VERSION = '2.5.0';
 
 /**
  * Dynamic Algorithmic Words-to-Number Parser
@@ -203,6 +206,7 @@ export class AssemblyVoiceAgentSession {
       this._replyHadContent = false;
       this._emptyReplyStreak = 0;
       this._pendingToolResults = []; // call_ids from a dead socket are useless
+      this._sessionUpdateSent = false; // fresh connection: config not yet applied
       this.sendToBrowser({
         type: 'status',
         state: 'CONNECTED',
@@ -271,11 +275,20 @@ export class AssemblyVoiceAgentSession {
       console.warn('[AssemblyAI] Cannot send session.update: WebSocket not in OPEN state.');
       return;
     }
+    // Replaying the greeting field on a mid-call reconnect makes the agent
+    // re-introduce itself and ignore everything the caller just said — the
+    // "agent keeps repeating its opening line" loop. Include it ONLY when
+    // this session.update is for a fresh call, never during recovery.
+    const includeGreeting = !this._recoveredSession;
     const sessionConfig = {
       type: 'session.update',
       session: {
         system_prompt: SENTINEL_SYSTEM_PROMPT,
-        greeting: 'SentinelVoice Treasury Guardian active. State your name, organization, and wire transfer requirements for dual-control verification.',
+        ...(includeGreeting
+          ? {
+              greeting: 'SentinelVoice Treasury Guardian active. State your name, organization, and wire transfer requirements for dual-control verification.'
+            }
+          : {}),
         output: {
           voice: 'ivy',
           format: {
@@ -284,15 +297,18 @@ export class AssemblyVoiceAgentSession {
           }
         },
         input: {
-          // Prefer transcription_mode + adaptive turn detection (per AssemblyAI docs).
-          // NOTE: setting min_silence/max_silence DISABLES the adaptive pacing and
-          // entity-aware waiting (e.g. waiting for full account numbers) — only set
-          // these when debugging, never in production.
-          transcription_mode: 'min_latency',
+          // 'min_latency' fragments caller finals into word-by-word bubbles — use
+          // 'balanced' (default) so partials match AssemblyAI starter behavior.
+          transcription_mode: 'balanced',
           voice_focus: 'near-field',
           voice_focus_threshold: 0.9,
           turn_detection: {
             vad_threshold: 0.5,
+            // Official starter defaults: a pause needs 1000ms of quiet to count
+            // as "caller finished", and the agent never waits past 3000ms.
+            // Prevents the agent replying to fragments ("Organization is" | "Bacon").
+            min_silence: 1000,
+            max_silence: 3000,
             interrupt_response: true
           },
           keyterms: [
@@ -312,6 +328,7 @@ export class AssemblyVoiceAgentSession {
     };
     console.log('[AssemblyAI] 🚀 Dispatching session.update (Inline Configuration)...');
     this.aaiWs.send(JSON.stringify(sessionConfig));
+    this._sessionUpdateSent = true; // recovery reply only after config is (re)applied
   }
 
   async handleAssemblyEvent(msg) {
@@ -321,10 +338,10 @@ export class AssemblyVoiceAgentSession {
       this.sendToBrowser({ type: 'session_ready' });
       // Mid-call recovery (worker recycle / resume): restart the conversation flow
       if (this.greetingSent && this._recoveredSession && this.sessionActive) {
-        if (this._lastConnectWasResume) {
+        if (this._lastConnectWasResume && !this._sessionUpdateSent) {
           // Context preserved by session.resume — just ask the agent to continue
           setTimeout(() => this.sendReplyCreate('Continue the verification procedure from where it stopped.'), 600);
-        } else if (this._conversationHistory.length) {
+        } else if (!this._lastConnectWasResume && this._conversationHistory.length) {
           // Fresh worker: re-seed the caller's recent requests, then continue
           const recentUserTurns = this._conversationHistory.filter((h) => h.role === 'user').slice(-4);
           for (const h of recentUserTurns) {
@@ -772,7 +789,15 @@ export class AssemblyVoiceAgentSession {
     // Baseline: remember WHICH utterance triggered this arm. If the caller has
     // started speaking again since, the nudge would respond to a stale fragment.
     this._watchdogBaselineAt = this._lastSpeechStartedAt;
+    this._nudgeCount = this._nudgeCount || 0;
+    if (this._watchdogNudgedUtterance === `${this._watchdogBaselineAt}:${this._lastUserFinalAt}`) {
+      // Same utterance already nudged once — don't stack identical prompts.
+      console.log('[SentinelVoice] Watchdog already nudged for this utterance — skipping duplicate nudge');
+      return;
+    }
     this._replyWatchdog = setTimeout(() => {
+      this._watchdogNudgedUtterance = `${this._watchdogBaselineAt}:${this._lastUserFinalAt}`;
+      this._nudgeCount += 1;
       console.warn('[SentinelVoice] ⏱️ No reply.started within 12s of caller final — nudging agent via reply.create');
       this.sendReplyCreate('Respond to the caller\'s last statement now. Acknowledge and continue the verification procedure.');
     }, 12000);
@@ -973,6 +998,16 @@ export class AssemblyVoiceAgentSession {
    */
   sendReplyCreate(instructions) {
     if (!this.aaiWs || this.aaiWs.readyState !== WebSocket.OPEN) return;
+    // Dedupe: identical instructions within 10s are almost always a retry storm
+    // (watchdog + stall nudge + recovery path firing for the same turn), which
+    // makes the agent repeat its opening line over and over.
+    const now = Date.now();
+    if (this._lastNudgeText === instructions && now - (this._lastNudgeAt || 0) < 10000) {
+      console.log('[SentinelVoice] reply.create suppressed — identical prompt already sent <10s ago');
+      return;
+    }
+    this._lastNudgeText = instructions;
+    this._lastNudgeAt = now;
     try {
       this.aaiWs.send(JSON.stringify({
         type: 'reply.create',
@@ -1069,6 +1104,11 @@ export class AssemblyVoiceAgentSession {
         this._emptyReplyStreak = 0;
         this._replyHadContent = false;
         this._recycleCount = 0; // fresh call: full recycle budget again
+        this._lastNudgeText = null;
+        this._lastNudgeAt = 0;
+        this._watchdogNudgedUtterance = null;
+        this._nudgeCount = 0;
+        this._recoveredSession = false; // brand-new call: greeting must play
 
         // Clean session state for brand new call to prevent bleed-through from earlier sessions
         const freshTx = EscrowService.reset();
@@ -1113,6 +1153,11 @@ export class AssemblyVoiceAgentSession {
         this._recycleCount = 0;
         this._lastSpeechStartedAt = 0;
         this._watchdogBaselineAt = 0;
+        this._lastNudgeText = null;
+        this._lastNudgeAt = 0;
+        this._watchdogNudgedUtterance = null;
+        this._nudgeCount = 0;
+        this._recoveredSession = false;
         this._audioAnchor = 0;
         this._audioBytes = 0;
         if (this.aaiWs) {

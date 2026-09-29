@@ -12,7 +12,7 @@ import {
   FileCheck2,
   Fingerprint
 } from 'lucide-react';
-import { useVoiceSession } from './hooks/useVoiceSession';
+import { useStoredAgentSession } from './hooks/useStoredAgentSession';
 import { LiveVoiceRoom } from './components/LiveVoiceRoom';
 import { VoiceWave } from './components/VoiceWave';
 import { EscrowStatusCard } from './components/EscrowStatusCard';
@@ -183,7 +183,7 @@ export default function App() {
     startMic,
     stopMic,
     micLevel
-  } = useVoiceSession();
+  } = useStoredAgentSession();
 
   const [isScenarioMenuOpen, setIsScenarioMenuOpen] = useState(false);
   const [isEnrollmentOpen, setIsEnrollmentOpen] = useState(false);

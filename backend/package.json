@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "bun --watch src/server.js",
     "start": "bun run src/server.js",
-    "test": "bun test"
+    "test": "bun test",
+    "agent:publish": "bun scripts/publish-agent.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

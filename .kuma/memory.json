@@ -1,7 +1,7 @@
 {
   "projectRoot": "/Users/mawa/Development/my_projects/sarjanamuda/G-voice",
-  "startTime": 1790215074021,
-  "lastActiveAt": 1790220737977,
+  "startTime": 1790378612382,
+  "lastActiveAt": 1790378612382,
   "currentGoal": "Exploring project",
   "currentBranch": "main",
   "branchSwitched": false,
@@ -10,91 +10,7 @@
   "failedFiles": [],
   "searchResults": [],
   "dependencyGraph": [],
-  "toolCalls": [
-    {
-      "toolName": "kuma_safety",
-      "params": {
-        "action": "verify"
-      },
-      "timestamp": 1790215074022
-    },
-    {
-      "toolName": "kuma_safety_verify",
-      "params": {},
-      "timestamp": 1790215074032
-    },
-    {
-      "toolName": "kuma_memory",
-      "params": {
-        "action": "gotcha"
-      },
-      "timestamp": 1790215081973
-    },
-    {
-      "toolName": "kuma_context_init",
-      "params": {},
-      "timestamp": 1790218376886
-    },
-    {
-      "toolName": "kuma_safety",
-      "params": {
-        "action": "verify"
-      },
-      "timestamp": 1790218726130
-    },
-    {
-      "toolName": "kuma_safety_verify",
-      "params": {},
-      "timestamp": 1790218726144
-    },
-    {
-      "toolName": "kuma_memory",
-      "params": {
-        "action": "decision"
-      },
-      "timestamp": 1790218829897
-    },
-    {
-      "toolName": "kuma_memory",
-      "params": {
-        "action": "decision"
-      },
-      "timestamp": 1790218837166
-    },
-    {
-      "toolName": "kuma_decision",
-      "params": {
-        "title": "Render Deployment Strategy (Unified Docker + Blueprint)"
-      },
-      "timestamp": 1790218837171
-    },
-    {
-      "toolName": "kuma_safety",
-      "params": {
-        "action": "verify"
-      },
-      "timestamp": 1790219101430
-    },
-    {
-      "toolName": "kuma_safety_verify",
-      "params": {},
-      "timestamp": 1790219101435
-    },
-    {
-      "toolName": "kuma_memory",
-      "params": {
-        "action": "decision"
-      },
-      "timestamp": 1790220737969
-    },
-    {
-      "toolName": "kuma_decision",
-      "params": {
-        "title": "Production Deployment on Railway Verified"
-      },
-      "timestamp": 1790220737975
-    }
-  ],
+  "toolCalls": [],
   "recordings": {
     "archFlows": 0,
     "gotchas": 4,

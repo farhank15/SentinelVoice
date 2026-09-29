@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SentinelVoice — Stored Agent Console</title>
+<style>
+  :root { --bg:#0b1220; --panel:#111c30; --line:#1e2d4a; --txt:#e8eefb; --mut:#8fa0bc; --red:#e8192c; --grn:#22c55e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:ui-monospace,Menlo,Consolas,monospace; background:var(--bg); color:var(--txt); padding:24px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:12px; margin-bottom:18px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  button { font:inherit; background:var(--panel); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:10px 16px; cursor:pointer; }
+  button.primary { background:var(--red); border-color:var(--red); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:0 0 8px; }
+  .state { font-size:12px; color:var(--mut); }
+  .state b { color:var(--txt); }
+  #log { height:300px; overflow-y:auto; font-size:13px; line-height:1.55; white-space:pre-wrap; }
+  .you { color:#7dd3fc; }
+  .agent { color:var(--grn); }
+  .evt { color:var(--mut); }
+  .err { color:var(--red); }
+  .ok { color:var(--grn); }
+</style>
+</head>
+<body>
+  <h1>🛡️ SentinelVoice — Stored Agent Console</h1>
+  <div class="sub">Browser → AssemblyAI direct (temporary token + agent_id). Backend only mints tokens & runs HTTP tools. Health: <a href="/api/health" style="color:#7dd3fc">/api/health</a></div>
+
+  <div class="card">
+    <h2>Stored Agent Binding</h2>
+    <div class="state">agent_id: <b id="agentId">loading…</b> <button id="refresh" style="padding:4px 10px;font-size:11px;margin-left:8px">recheck</button></div>
+    <div class="state" id="pubHint" style="margin-top:6px"></div>
+  </div>
+
+  <div class="row">
+    <button id="start" class="primary">📞 Start call</button>
+    <button id="end" disabled>⏹ End call</button>
+  </div>
+
+  <div class="card">
+    <h2>Live transcript</h2>
+    <div id="log"></div>
+    <div class="state" style="margin-top:8px">state: <b id="state">idle</b></div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (text, cls = 'evt') => {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = text;
+  $('log').appendChild(line);
+  $('log').scrollTop = $('log').scrollHeight;
+};
+
+let AGENT_ID = null;
+async function loadAgentStatus() {
+  try {
+    const s = await fetch('/api/agent/status').then((r) => r.json());
+    AGENT_ID = s.stored_agent_id;
+    $('agentId').textContent = AGENT_ID || 'NOT PUBLISHED';
+    $('pubHint').textContent = AGENT_ID
+      ? '✅ Stored agent bound. Start the call — config loads server-side from AssemblyAI.'
+      : '⚠️ Publish first: PUBLIC_BASE_URL=https://<tunnel> bun scripts/publish-agent.mjs';
+    $('start').disabled = !AGENT_ID;
+  } catch (e) {
+    $('agentId').textContent = 'status error';
+  }
+}
+$('refresh').addEventListener('click', loadAgentStatus);
+loadAgentStatus();
+
+let ws = null, audioCtx = null, stream = null, workletNode = null, ready = false, playbackTime = 0;
+
+async function startCall() {
+  try {
+    $('state').textContent = 'minting token…';
+    const { token } = await fetch('/api/voice-token').then((r) => {
+      if (!r.ok) throw new Error('token mint failed: ' + r.status);
+      return r.json();
+    });
+
+    // Forced 24kHz context — Chromium shortcut (docs). Chrome/Edge ok; Firefox/Safari
+    // need the resampling worklet variant (see browser-integration docs).
+    audioCtx = new AudioContext({ sampleRate: 24000 });
+    await audioCtx.resume();
+    await audioCtx.audioWorklet.addModule('/pcm-processor.js');
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: false }
+    });
+
+    const url = new URL('wss://agents.assemblyai.com/v1/ws');
+    url.searchParams.set('token', token);
+    ws = new WebSocket(url);
+    ready = false;
+
+    workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+    const source = audioCtx.createMediaStreamSource(stream);
+
+    ws.addEventListener('open', () => {
+      // agent_id is mutually exclusive with inline config fields
+      ws.send(JSON.stringify({ type: 'session.update', session: { agent_id: AGENT_ID } }));
+    });
+
+    ws.addEventListener('message', (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      switch (msg.type) {
+        case 'session.ready':
+          ready = true;
+          source.connect(workletNode);
+          playbackTime = audioCtx.currentTime;
+          $('state').textContent = 'LIVE — start speaking';
+          log('— session ready —', 'ok');
+          break;
+        case 'reply.audio': {
+          const raw = atob(msg.data || msg.audio || '');
+          const pcm16 = new Int16Array(raw.length / 2);
+          for (let i = 0; i < pcm16.length; i++) {
+            pcm16[i] = raw.charCodeAt(i * 2) | (raw.charCodeAt(i * 2 + 1) << 8);
+          }
+          const node = new AudioWorkletNode(audioCtx, 'playback-processor');
+          node.connect(audioCtx.destination);
+          node.port.postMessage({ pcm16 });
+          break;
+        }
+        case 'transcript.user':
+          log(`Caller: ${msg.text}`, 'you');
+          break;
+        case 'transcript.agent':
+          log(`SentinelVoice: ${msg.text}`, 'agent');
+          break;
+        case 'tool.call':
+          log(`⚡ tool.call: ${msg.name}`, 'evt');
+          break;
+        case 'session.error':
+        case 'error':
+          log(`Error: ${msg.message || msg.code}`, 'err');
+          break;
+        case 'session.ended':
+          cleanup();
+          break;
+      }
+    });
+
+    workletNode.port.onmessage = (e) => {
+      if (ready && ws.readyState === WebSocket.OPEN) {
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(e.data)));
+        ws.send(JSON.stringify({ type: 'input.audio', audio: b64 }));
+      }
+    };
+
+    ws.addEventListener('close', () => { if (ready) cleanup(); });
+
+    $('start').disabled = true;
+    $('end').disabled = false;
+    $('state').textContent = 'connecting…';
+    log('— dialing AssemblyAI stored agent —', 'evt');
+  } catch (e) {
+    log('Start failed: ' + e.message, 'err');
+    cleanup();
+  }
+}
+
+function endCall() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    // session.end FIRST (bare close leaves a billable 30s grace window)
+    ws.send(JSON.stringify({ type: 'session.end' }));
+    setTimeout(cleanup, 1500);
+  } else {
+    cleanup();
+  }
+}
+
+function cleanup() {
+  try { ws && ws.close(); } catch {}
+  try { stream && stream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { audioCtx && audioCtx.close(); } catch {}
+  ws = null; audioCtx = null; stream = null; workletNode = null; ready = false;
+  $('start').disabled = !AGENT_ID;
+  $('end').disabled = true;
+  $('state').textContent = 'idle';
+}
+window.addEventListener('pagehide', () => {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'session.end' }));
+});
+
+$('start').addEventListener('click', startCall);
+$('end').addEventListener('click', endCall);
+</script>
+</body>
+</html>
